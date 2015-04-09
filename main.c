@@ -27,8 +27,8 @@ typedef struct {
 } commands;
 
 commands *parse_commands(char *);
-int exec_cmd(cmd *);
-int exec_commands(commands);
+int exec_cmd(const cmd *);
+int exec_commands(const commands *);
 
 /*
  * 1. Read input.
@@ -64,25 +64,27 @@ int main(void) {
 
 		/* TODO: Fork. Execute commands */
 		if (commands->length == 1) {
-			if (!exec_cmd(*commands->cmds)) {
+			if (exec_cmd(*commands->cmds) < 0) {
 				/* Execute failed */
+				perror(SMSH);
 			}
 		} else {
 			/* Commands were piped, handle it accordingly */
+			exec_commands(commands);
 		}
 
 		if (!commands->bg) {
 			/* Handle foreground waiting */
+			int status;
+			wait(&status);
 		}
-
-		printf("%s\n", input);
 
 		add_history(input);
 
 		free(input);
 	}
 
-	return 0;
+	return EXIT_SUCCESS;
 }
 
 commands *parse_commands(char *input) {
@@ -199,7 +201,7 @@ int (*builtins_funcs[]) (char **) = {
 
 #define NUM_BUILTINS (sizeof(builtins) / sizeof(*builtins))
 
-int exec_cmd(cmd *command) {
+int exec_cmd(const cmd *command) {
 	int i;
 	/* Check for command in builtins first.
 	 * If it does not exist there then assume it's an existing command. */
@@ -209,12 +211,24 @@ int exec_cmd(cmd *command) {
 		}
 	}
 
-	return execvp(command->cmd, command->args);
+	/* TODO: Error handling; check PID */
+	if (!fork()) {
+		return execvp(command->cmd, command->args);
+	} else {
+		/* continue execution as parent */
+		return EXIT_SUCCESS;
+	}
 }
 
-int exec_commands(commands commands) {
+int exec_commands(const commands *commands) {
 	/* Pipes etc etc */
-	exit(EXIT_SUCCESS);
+	if (!fork()) {
+		/* in child */
+		exit(EXIT_SUCCESS);
+	} else {
+		printf("TODO: Pipe multiple commands.\n");
+		return EXIT_SUCCESS;
+	}
 }
 
 /* Built in commands */
@@ -224,15 +238,14 @@ int exit_cmd(char **args) {
 }
 
 int cd_cmd(char **args) {
-	/* TODO: Make sure len(args) >= 2 */
 	char *dir = "~";
 	if (args[1]) {
 		dir = args[1];
 	}
 	if (0 != chdir(dir)) {
-		perror(SMSH);
+		perror("cd");
 	}
-	exit(EXIT_SUCCESS);
+	return EXIT_SUCCESS;
 }
 
 int checkEnv_cmd(char **args) {
