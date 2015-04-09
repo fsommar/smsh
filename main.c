@@ -16,23 +16,23 @@ extern char *strtok_r(char *, const char *, char **);
 /* e.g. "ls -aHpl" */
 typedef struct {
 	uint32_t num_args;
-	char *cmd; /* "ls" */
-	char **args; /* ["ls", "-aHpl"] */
-} cmd;
+	char *bin; /* "ls" */
+	char **args; /* ["ls", "-aHpl", NULL] */
+} Command;
 
 typedef struct {
 	uint32_t length;
-	cmd **cmds;
+	Command **cmds;
 	bool bg;
-} commands;
+} CommandList;
 
-commands *parse_commands(char *);
-int exec_cmd(const cmd *);
-int exec_commands(const commands *);
+CommandList *parse_commands(char *);
+int exec_cmd(Command *);
+int exec_commands(const CommandList *);
 
 /*
  * 1. Read input.
- * 2. Split into arguments and create commands struct.
+ * 2. Split into arguments and create CommandList struct.
  * 3. Execute each command and pipe if more than one in the background if bg or foreground otherwise.
  *
  * Make sure child processes are killed when parent is by registering signal handlers.
@@ -42,10 +42,12 @@ int main(void) {
 
 	for (;;) {
 		/* Declarations at the top */
+		int status;
 		char prompt[90];
 		char *input;
+		char history[1024];
 		const char *path = getcwd(NULL, 80);
-		commands *commands;
+		CommandList *commands;
 
 		strcpy(prompt, path);
 		strcat(prompt, " ¥ ");
@@ -54,17 +56,22 @@ int main(void) {
 		 * it's the callee's (our) obligation to free it */
 		input = readline(prompt);
 		if (!input) break;
+		/* parse_commands modifies input - copy and save for adding to history */
+		strcpy(history, input);
 
 		/* 2. Parse arguments into commands. */
 		commands = parse_commands(input);
 
-		if (!commands || commands->length == 0) {
+		if (!commands) { continue; }
+		if (commands->length == 0) {
+			free(commands->cmds);
+			free(commands);
 			continue;
 		}
 
 		/* TODO: Fork. Execute commands */
 		if (commands->length == 1) {
-			if (exec_cmd(*commands->cmds) < 0) {
+			if (exec_cmd(commands->cmds[0]) < 0) {
 				/* Execute failed */
 				perror(SMSH);
 			}
@@ -75,11 +82,13 @@ int main(void) {
 
 		if (!commands->bg) {
 			/* Handle foreground waiting */
-			int status;
 			wait(&status);
+			/* TODO: Handle freeing for background as well */
+			free(commands->cmds);
+			free(commands);
 		}
 
-		add_history(input);
+		add_history(history);
 
 		free(input);
 	}
@@ -87,100 +96,84 @@ int main(void) {
 	return EXIT_SUCCESS;
 }
 
-commands *parse_commands(char *input) {
-	int num_cmds = 0, num_args = 0, bg_counter = 0;
+CommandList *parse_commands(char *input) {
 	int cmds_buf_len = 2, args_buf_len = 2;
 
 	const char *pipe_delim = "|";
 	char *cmd_str;
 	char *save_pipe_ptr;
-	
+
 	const char *delim = " ";
-	char *token;
+	char *arg_str;
 	char *save_space_ptr;
 
-	char **args;
-	cmd **cmds;
-	commands *commands_struct;
-	cmd *command;
-
+	CommandList *commands;
+	Command *command;
 
 	/* Free in main method after processing all the commands */
-	commands_struct = malloc(sizeof(*commands_struct));
-
-	cmds = calloc(cmds_buf_len, sizeof(*cmds));
+	commands = malloc(sizeof(*commands));
+	commands->bg = false;
+	commands->length = 0;
+	commands->cmds = calloc(cmds_buf_len, sizeof(*commands->cmds));
 
 	/* Split the inputs into commands by using the pipeline as a deliminator */
 	cmd_str = strtok_r(input, pipe_delim, &save_pipe_ptr);
 
 	while (NULL != cmd_str) {
+		/* Split the command into tokens by using space as a deliminator */
+		arg_str = strtok_r(cmd_str, delim, &save_space_ptr);
+		args_buf_len = 2;
 		/* Free in main method after processing the command */
 		command = malloc(sizeof(*command));
-		args_buf_len = 2;
-		args = calloc(args_buf_len, sizeof(*args));
+		command->num_args = 0;
+		command->args = calloc(args_buf_len, sizeof(*command->args));
+		command->bin = arg_str;
 
-		/* Split the command into tokens by using space as a deliminator */
-		token = strtok_r(cmd_str, delim, &save_space_ptr);
-		command->cmd = token;
-
-		num_args = 0;
 		/* Adds all the tokens to the command arguments, including the command itself */
-		while (NULL != token) {
-			/* Counts the number of background characters to be able to indicate parse warnings */
-			if (0 == strcmp(token, "&")) { bg_counter++; }
-
-			/* grow buffer if necessary */
-			if (num_args >= args_buf_len - 1) {
-				/* realloc buffer */
-				args_buf_len += 2;
-				args = realloc(args, args_buf_len);
-				if (!args) {
-					/* Couldn't allocate enough memory */
-					exit(EXIT_FAILURE);
-				}
+		while (NULL != arg_str) {
+			if (commands->bg) {
+				/* If '&' already was seen then it's not the last symbol */
+				fprintf(stderr, "smsh: inaccurate use of background character '&' (%s)", arg_str);
+				return NULL;
 			}
 
-			args[num_args] = token;
-			token = strtok_r(NULL, delim, &save_space_ptr);
-			num_args++;
+			if (0 == strcmp(arg_str, "&")) {
+				commands->bg = true;
+			} else {
+				/* grow buffer if necessary */
+				if (command->num_args + 1 >= args_buf_len) {
+					/* realloc buffer */
+					args_buf_len += 2;
+					command->args = realloc(command->args, sizeof(*command->args) * args_buf_len);
+					if (!command->args) {
+						/* Couldn't allocate enough memory */
+						exit(EXIT_FAILURE);
+					}
+				}
+
+				command->args[command->num_args++] = arg_str;
+				/* Terminate the list with a NULL pointer as expected by execv */
+				command->args[command->num_args] = NULL;
+			}
+			arg_str = strtok_r(NULL, delim, &save_space_ptr);
 		}
 
 		/* grow buffer if necessary */
-		if (num_cmds >= cmds_buf_len - 1) {
+		if (commands->length + 1 >= cmds_buf_len) {
 			/* realloc buffer */
 			cmds_buf_len += 2;
-			cmds = realloc(cmds, cmds_buf_len);
-			if (!cmds) {
+			commands->cmds = realloc(commands->cmds, sizeof(*commands->cmds) * cmds_buf_len);
+			if (!commands->cmds) {
 				/* Couldn't allocate enough memory */
 				exit(EXIT_FAILURE);
 			}
 		}
 
-		command->args = args;
-		command->num_args = num_args;
-		cmds[num_cmds] = command;
-		num_cmds++;
+		commands->cmds[commands->length++] = command;
 		cmd_str = strtok_r(NULL, pipe_delim, &save_pipe_ptr);
 	}
 
-	commands_struct->cmds = cmds;
-	commands_struct->length = num_cmds;
-
-	/* Check if the processes should be run in the background or if there are parse errors */
-	if (0 == bg_counter) {
-		commands_struct->bg = false;
-		return commands_struct;
-	} else if (1 == bg_counter) {
-		cmd last_command = *commands_struct->cmds[commands_struct->length - 1];
-		if (0 == strcmp(last_command.args[last_command.num_args - 1], "&")) {
-			commands_struct->bg = true;
-			return commands_struct;
-		}
-	}
-	
-	fprintf(stderr, "smsh: inaccurate use of background character '&'\n");
-
-	return NULL;
+	return commands;
 }
 
 int exit_cmd(char **);
@@ -201,26 +194,28 @@ int (*builtins_funcs[]) (char **) = {
 
 #define NUM_BUILTINS (sizeof(builtins) / sizeof(*builtins))
 
-int exec_cmd(const cmd *command) {
+int exec_cmd(Command *command) {
 	int i;
 	/* Check for command in builtins first.
 	 * If it does not exist there then assume it's an existing command. */
 	for (i = 0; i < NUM_BUILTINS; i++) {
-		if (0 == strcmp(command->cmd, builtins[i])) {
+		if (0 == strcmp(command->bin, builtins[i])) {
 			return (*builtins_funcs[i])(command->args);
 		}
 	}
 
 	/* TODO: Error handling; check PID */
 	if (!fork()) {
-		return execvp(command->cmd, command->args);
+		return execvp(command->bin, command->args);
 	} else {
+		free(command->args);
+		free(command);
 		/* continue execution as parent */
 		return EXIT_SUCCESS;
 	}
 }
 
-int exec_commands(const commands *commands) {
+int exec_commands(const CommandList *commands) {
 	/* Pipes etc etc */
 	if (!fork()) {
 		/* in child */
