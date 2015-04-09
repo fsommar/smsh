@@ -10,15 +10,18 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
+extern char *strtok_r(char *, const char *, char **);
+
 /* e.g. "ls -aHpl" */
 typedef struct {
+	uint32_t num_args;
 	char *cmd; /* "ls" */
 	char **args; /* ["-aHpl"] */
 } cmd;
 
 typedef struct {
 	uint32_t length;
-	cmd *cmds;
+	cmd **cmds;
 	bool bg;
 } commands;
 
@@ -50,7 +53,7 @@ int main(void) {
 
 		/* TODO: Fork. Execute commands */
 		if (commands->length == 1) {
-			if (!exec_cmd(commands->cmds)) {
+			if (!exec_cmd(*commands->cmds)) {
 				/* Execute failed */
 			}
 		} else {
@@ -72,9 +75,100 @@ int main(void) {
 }
 
 commands *parse_commands(char *input) {
+	int num_cmds = 0, num_args = 0, bg_counter = 0;
+	int cmds_buf_len = 2, args_buf_len = 2;
+
+	const char *pipe_delim = "|";
+	char *cmd_str;
+	char *save_pipe_ptr;
+	
+	const char *delim = " ";
+	char *token;
+	char *save_space_ptr;
+
+	char **args;
+	cmd **cmds;
+	commands *commands_struct;
+	cmd *command;
+
+
+	/* Free in main method after processing all the commands */
+	commands_struct = malloc(sizeof(*commands_struct));
+
+	cmds = calloc(cmds_buf_len, sizeof(*cmds));
+
+	/* Split the inputs into commands by using the pipeline as a deliminator */
+	cmd_str = strtok_r(input, pipe_delim, &save_pipe_ptr);
+
+	while (NULL != cmd_str) {
+		/* Free in main method after processing the command */
+		command = malloc(sizeof(*command));
+		args_buf_len = 2;
+		args = calloc(args_buf_len, sizeof(*args));
+
+		/* Split the command into tokens by using space as a deliminator */
+		token = strtok_r(cmd_str, delim, &save_space_ptr);
+		command->cmd = token;
+
+		num_args = 0;
+		/* Adds all the tokens to the command arguments, including the command itself */
+		while (NULL != token) {
+			/* Counts the number of background characters to be able to indicate parse warnings */
+			if (0 == strcmp(token, "&")) { bg_counter++; }
+
+			/* grow buffer if necessary */
+			if (num_args >= args_buf_len - 1) {
+				/* realloc buffer */
+				args_buf_len += 2;
+				args = realloc(args, args_buf_len);
+				if (!args) {
+					/* Couldn't allocate enough memory */
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			args[num_args] = token;
+			token = strtok_r(NULL, delim, &save_space_ptr);
+			num_args++;
+		}
+
+		/* grow buffer if necessary */
+		if (num_cmds >= cmds_buf_len - 1) {
+			/* realloc buffer */
+			cmds_buf_len += 2;
+			cmds = realloc(cmds, cmds_buf_len);
+			if (!cmds) {
+				/* Couldn't allocate enough memory */
+				exit(EXIT_FAILURE);
+			}
+		}
+
+		command->args = args;
+		command->num_args = num_args;
+		cmds[num_cmds] = command;
+		num_cmds++;
+		cmd_str = strtok_r(NULL, pipe_delim, &save_pipe_ptr);
+	}
+
+	commands_struct->cmds = cmds;
+	commands_struct->length = num_cmds;
+
+	/* Check if the processes should be run in the background or if there are parse errors */
+	if (0 == bg_counter) {
+		commands_struct->bg = false;
+		return commands_struct;
+	} else if (1 == bg_counter) {
+		cmd last_command = *commands_struct->cmds[commands_struct->length - 1];
+		if (0 == strcmp(last_command.args[last_command.num_args - 1], "&")) {
+			commands_struct->bg = true;
+			return commands_struct;
+		}
+	}
+	
+	fprintf(stderr, "smsh: inaccurate use of background character '&'\n");
+
 	return NULL;
 }
-
 
 int exec_cmd(cmd *command) {
 	return 0;
