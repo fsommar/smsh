@@ -11,12 +11,13 @@
 #include <readline/history.h>
 
 extern char *strtok_r(char *, const char *, char **);
+#define SMSH ("smsh")
 
 /* e.g. "ls -aHpl" */
 typedef struct {
 	uint32_t num_args;
 	char *cmd; /* "ls" */
-	char **args; /* ["-aHpl"] */
+	char **args; /* ["ls", "-aHpl"] */
 } cmd;
 
 typedef struct {
@@ -27,6 +28,7 @@ typedef struct {
 
 commands *parse_commands(char *);
 int exec_cmd(cmd *);
+int exec_commands(commands);
 
 /*
  * 1. Read input.
@@ -39,13 +41,22 @@ int exec_cmd(cmd *);
 int main(void) {
 
 	for (;;) {
+		/* Declarations at the top */
+		char prompt[90];
+		char *input;
+		const char *path = getcwd(NULL, 80);
+		commands *commands;
+
+		strcpy(prompt, path);
+		strcat(prompt, " ¥ ");
+
 		/* input is allocated in readline.
-		 * it's the callee's obligation to free it */
-		char *input = readline("smsh ¥ ");
+		 * it's the callee's (our) obligation to free it */
+		input = readline(prompt);
 		if (!input) break;
 
-		/* 2. Split into arguments. */
-		commands *commands = parse_commands(input);
+		/* 2. Parse arguments into commands. */
+		commands = parse_commands(input);
 
 		if (!commands || commands->length == 0) {
 			continue;
@@ -170,6 +181,60 @@ commands *parse_commands(char *input) {
 	return NULL;
 }
 
+int exit_cmd(char **);
+int cd_cmd(char **);
+int checkEnv_cmd(char **);
+
+const char *builtins[] = {
+	"exit",
+	"cd",
+	"checkEnv"
+};
+
+int (*builtins_funcs[]) (char **) = {
+	&exit_cmd,
+	&cd_cmd,
+	&checkEnv_cmd
+};
+
+#define NUM_BUILTINS (sizeof(builtins) / sizeof(*builtins))
+
 int exec_cmd(cmd *command) {
-	return 0;
+	int i;
+	/* Check for command in builtins first.
+	 * If it does not exist there then assume it's an existing command. */
+	for (i = 0; i < NUM_BUILTINS; i++) {
+		if (0 == strcmp(command->cmd, builtins[i])) {
+			return (*builtins_funcs[i])(command->args);
+		}
+	}
+
+	return execvp(command->cmd, command->args);
+}
+
+int exec_commands(commands commands) {
+	/* Pipes etc etc */
+	exit(EXIT_SUCCESS);
+}
+
+/* Built in commands */
+int exit_cmd(char **args) {
+	/* TODO: Cleanup child processes? */
+	exit(EXIT_SUCCESS);
+}
+
+int cd_cmd(char **args) {
+	/* TODO: Make sure len(args) >= 2 */
+	char *dir = "~";
+	if (args[1]) {
+		dir = args[1];
+	}
+	if (0 != chdir(dir)) {
+		perror(SMSH);
+	}
+	exit(EXIT_SUCCESS);
+}
+
+int checkEnv_cmd(char **args) {
+	exit(EXIT_SUCCESS);
 }
