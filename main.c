@@ -1,5 +1,10 @@
-#include <stdlib.h>
-#include <stdio.h>
+#include <sys/types.h> /* defines the type pid_t */
+#include <sys/wait.h> /* defines for instance waitpid() and WIFEXITED */
+#include <errno.h> /* defines errno */
+#include <unistd.h> /* defines for instance fork(), exec(), pipe() and STDIN_FILENO */
+#include <stdlib.h> /* defines for instance malloc(), free(), exit(), rand() and RAND_MAX */
+#include <stdio.h> /* defines for instance stderr and perror() */
+#include <string.h> /* defines strcmp() and strtok() */
 #include <stdint.h>
 #include <stdbool.h>
 #include <readline/readline.h>
@@ -63,7 +68,7 @@ int main(void) {
 		free(input);
 	}
 
-	return 1;
+	return 0;
 }
 
 commands *parse_commands(char *input) {
