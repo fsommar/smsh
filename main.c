@@ -5,17 +5,15 @@
 #include <stdlib.h> /* defines for instance malloc(), free(), exit(), rand() and RAND_MAX */
 #include <stdio.h> /* defines for instance stderr and perror() */
 #include <string.h> /* defines strcmp() and strtok() */
-#include <stdint.h>
 #include <stdbool.h>
 #include <readline/readline.h>
-#include <readline/history.h>
 
 extern char *strtok_r(char *, const char *, char **);
 #define SMSH ("smsh")
 
 /* e.g. "ls -aHpl" */
 typedef struct {
-	uint32_t num_args;
+	uint32_t num_args; /* 2 */
 	char *bin; /* "ls" */
 	char **args; /* ["ls", "-aHpl", NULL] */
 } Command;
@@ -97,37 +95,32 @@ int main(void) {
 }
 
 CommandList *parse_commands(char *input) {
-	int cmds_buf_len = 2, args_buf_len = 2;
-
-	const char *pipe_delim = "|";
-	char *cmd_str;
-	char *save_pipe_ptr;
-
-	const char *delim = " ";
-	char *arg_str;
-	char *save_space_ptr;
-
-	CommandList *commands;
-	Command *command;
-
 	/* Free in main method after processing all the commands */
-	commands = malloc(sizeof(*commands));
+	CommandList *commands = malloc(sizeof(*commands));
+
+	/* Split the inputs into commands by using the pipeline as a deliminator */
+	const char *pipe_delim = "|";
+	char *save_pipe_ptr;
+	char *cmd_str = strtok_r(input, pipe_delim, &save_pipe_ptr);
+
+	size_t cmds_buf_len = 2;
 	commands->bg = false;
 	commands->length = 0;
 	commands->cmds = calloc(cmds_buf_len, sizeof(*commands->cmds));
 
-	/* Split the inputs into commands by using the pipeline as a deliminator */
-	cmd_str = strtok_r(input, pipe_delim, &save_pipe_ptr);
-
 	while (NULL != cmd_str) {
-		/* Split the command into tokens by using space as a deliminator */
-		arg_str = strtok_r(cmd_str, delim, &save_space_ptr);
-		args_buf_len = 2;
 		/* Free in main method after processing the command */
-		command = malloc(sizeof(*command));
+		Command *command = malloc(sizeof(*command));
+
+		/* Split the command into tokens by using space as a deliminator */
+		const char *delim = " ";
+		char *save_space_ptr;
+		char *arg_str = strtok_r(cmd_str, delim, &save_space_ptr);
+
+		size_t args_buf_len = 3;
+		command->bin = arg_str;
 		command->num_args = 0;
 		command->args = calloc(args_buf_len, sizeof(*command->args));
-		command->bin = arg_str;
 
 		/* Adds all the tokens to the command arguments, including the command itself */
 		while (NULL != arg_str) {
@@ -140,13 +133,12 @@ CommandList *parse_commands(char *input) {
 			if (0 == strcmp(arg_str, "&")) {
 				commands->bg = true;
 			} else {
-				/* grow buffer if necessary */
+				/* grow args buffer if necessary */
 				if (command->num_args + 1 >= args_buf_len) {
-					/* realloc buffer */
 					args_buf_len += 2;
-					command->args = realloc(command->args, sizeof(*command->args) * args_buf_len);
+					command->args = realloc(command->args, args_buf_len * sizeof(*command->args));
 					if (!command->args) {
-						/* Couldn't allocate enough memory */
+						perror("realloc fail");
 						exit(EXIT_FAILURE);
 					}
 				}
@@ -158,13 +150,12 @@ CommandList *parse_commands(char *input) {
 			arg_str = strtok_r(NULL, delim, &save_space_ptr);
 		}
 
-		/* grow buffer if necessary */
+		/* grow commands buffer if necessary */
 		if (commands->length + 1 >= cmds_buf_len) {
-			/* realloc buffer */
 			cmds_buf_len += 2;
-			commands->cmds = realloc(commands->cmds, sizeof(*commands->cmds) * cmds_buf_len);
+			commands->cmds = realloc(commands->cmds, cmds_buf_len * sizeof(*commands->cmds));
 			if (!commands->cmds) {
-				/* Couldn't allocate enough memory */
+				perror("realloc fail");
 				exit(EXIT_FAILURE);
 			}
 		}
@@ -192,7 +183,7 @@ int (*builtins_funcs[]) (char **) = {
 	&checkEnv_cmd
 };
 
-#define NUM_BUILTINS (sizeof(builtins) / sizeof(*builtins))
+#define NUM_BUILTINS ((int) (sizeof(builtins) / sizeof(*builtins)))
 
 int exec_cmd(Command *command) {
 	int i;
