@@ -1,5 +1,6 @@
 #include <sys/types.h> /* defines the type pid_t */
 #include <sys/wait.h> /* defines for instance waitpid() and WIFEXITED */
+#include <sys/time.h>
 #include <errno.h> /* defines errno */
 #include <unistd.h> /* defines for instance fork(), exec(), pipe() and STDIN_FILENO */
 #include <stdlib.h> /* defines for instance malloc(), free(), exit(), rand() and RAND_MAX */
@@ -36,6 +37,7 @@ int exec_commands(const CommandList *);
  *
  * Make sure child processes are killed when parent is by registering signal handlers.
  */
+static struct timeval fg_time;
 
 int main(void) {
 
@@ -68,11 +70,12 @@ int main(void) {
 			continue;
 		}
 
-		/* TODO: Fork. Execute commands */
+		add_history(history);
+
 		if (commands->length == 1) {
-			if (exec_cmd(commands->cmds[0]) < 0) {
+			if (EXIT_SUCCESS != exec_cmd(commands->cmds[0])) {
 				/* Execute failed */
-				perror(SMSH);
+				break;
 			}
 		} else {
 			/* Commands were piped, handle it accordingly */
@@ -80,14 +83,20 @@ int main(void) {
 		}
 
 		if (!commands->bg) {
+			struct timeval cur;
+			uint64_t time_taken;
 			/* Handle foreground waiting */
 			wait(&status);
+
+			gettimeofday(&cur, NULL);
+
+			time_taken = 1000 * (cur.tv_sec - fg_time.tv_sec) + (cur.tv_usec - fg_time.tv_usec) / 1000;
+			printf("%llu ms\n", time_taken);
+
 			/* TODO: Handle freeing for background as well */
 			free(commands->cmds);
 			free(commands);
 		}
-
-		add_history(history);
 
 		free(input);
 	}
@@ -189,10 +198,12 @@ int (*builtins_funcs[]) (char **) = {
 int exec_cmd(Command *command) {
 	pid_t pid;
 	int i;
+
 	/* Check for command in builtins first.
 	 * If it does not exist there then assume it's an existing command. */
 	for (i = 0; i < NUM_BUILTINS; i++) {
 		if (0 == strcmp(command->bin, builtins[i])) {
+			gettimeofday(&fg_time, NULL);
 			return (*builtins_funcs[i])(command->args);
 		}
 	}
@@ -200,11 +211,14 @@ int exec_cmd(Command *command) {
 	/* Fork the process and execute the command on the child process */
 	pid = fork();
 	if (0 == pid) { /* Start execution as child */
-		return execvp(command->bin, command->args);
+		execvp(command->bin, command->args);
+		perror(SMSH);
+		return EXIT_FAILURE;
 	} else if (-1 == pid) { /* Error handling */
 		perror("fork");
 		return EXIT_FAILURE;
 	} else { /* Continue execution as parent */
+		gettimeofday(&fg_time, NULL);
 		free(command->args);
 		free(command);
 		return EXIT_SUCCESS;
