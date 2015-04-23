@@ -6,6 +6,7 @@
 #include <stdio.h> /* defines for instance stderr and perror() */
 #include <string.h> /* defines strcmp() and strtok() */
 #include <stdbool.h>
+#include <stdint.h>
 #include <readline/readline.h>
 
 extern char *strtok_r(char *, const char *, char **);
@@ -186,6 +187,7 @@ int (*builtins_funcs[]) (char **) = {
 #define NUM_BUILTINS ((int) (sizeof(builtins) / sizeof(*builtins)))
 
 int exec_cmd(Command *command) {
+	pid_t pid;
 	int i;
 	/* Check for command in builtins first.
 	 * If it does not exist there then assume it's an existing command. */
@@ -195,23 +197,31 @@ int exec_cmd(Command *command) {
 		}
 	}
 
-	/* TODO: Error handling; check PID */
-	if (!fork()) {
+	/* Fork the process and execute the command on the child process */
+	pid = fork();
+	if (0 == pid) { /* Start execution as child */
 		return execvp(command->bin, command->args);
-	} else {
+	} else if (-1 == pid) { /* Error handling */
+		perror("fork");
+		return EXIT_FAILURE;
+	} else { /* Continue execution as parent */
 		free(command->args);
 		free(command);
-		/* continue execution as parent */
 		return EXIT_SUCCESS;
 	}
 }
 
 int exec_commands(const CommandList *commands) {
+	pid_t pid;
 	/* Pipes etc etc */
-	if (!fork()) {
-		/* in child */
-		exit(EXIT_SUCCESS);
-	} else {
+	pid = fork();
+	if (0 == pid) { /* Start execution as child */
+		return execvp(commands->cmds[0]->bin, commands->cmds[0]->args);
+	} else if (-1 == pid) { /* Error handling */
+		perror("fork");
+		return EXIT_FAILURE;
+	} else { /* Continue execution as parent */
+		/* TODO: free all commands after piping and forking */
 		printf("TODO: Pipe multiple commands.\n");
 		return EXIT_SUCCESS;
 	}
