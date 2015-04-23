@@ -9,10 +9,12 @@
 #include <string.h> /* defines strcmp() and strtok() */
 #include <stdbool.h>
 #include <stdint.h>
+#include <setjmp.h>
 #include <readline/readline.h>
 
 extern char *strtok_r(char *, const char *, char **);
 #define SMSH ("smsh")
+#define SIGDET 1
 
 /* e.g. "ls -aHpl" */
 typedef struct {
@@ -39,16 +41,44 @@ int exec_commands(const CommandList *);
  * Make sure child processes are killed when parent is by registering signal handlers.
  */
 static struct timeval fg_time;
+sigjmp_buf prompt_mark;
 pid_t pid;
 
-void handler(int x) {
-	if (SIGINT == x && -1 == kill(pid, SIGKILL)) {
+void handler(int sig) {
+	if (SIGINT == sig && -1 == kill(pid, SIGKILL)) {
 		perror("kill");
 	}
 }
 
+void check_children(int sig) {
+	if (SIGCHLD == sig) {
+		pid_t zombie;
+		while (-1 != (zombie = waitpid(-1, NULL, WNOHANG))) {
+			fprintf(stderr, "%d done\n", (int) zombie);
+		}
+		/* Jump back to prompt */
+		siglongjmp(prompt_mark, 1);
+	}
+}
+
 int main(void) {
+#if SIGDET
+	/* Register handler for cleanup of background processes */
+	struct sigaction sa;
+	sa.sa_handler = &check_children;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = SA_NOCLDSTOP;
+	if (-1 == sigaction(SIGCHLD, &sa, NULL)) {
+		perror("sigaction");
+		exit(EXIT_FAILURE);
+	}
+#endif
+
+	/* Ignore interrupt signal */
 	signal(SIGINT, SIG_IGN);
+
+	/* Set prompt mark here */
+	while (0 != sigsetjmp(prompt_mark, 1));
 
 	for (;;) {
 		/* Declarations at the top */
@@ -84,7 +114,7 @@ int main(void) {
 		if (commands->length == 1) {
 			if (EXIT_SUCCESS != exec_cmd(commands->cmds[0])) {
 				/* Execute failed */
-				break;
+				continue;
 			}
 		} else {
 			/* Commands were piped, handle it accordingly */
@@ -92,12 +122,22 @@ int main(void) {
 		}
 
 		if (!commands->bg) {
-			signal(SIGINT, handler);
 			struct timeval cur;
 			uint64_t time_taken;
+
+#if SIGDET
+			void (*sighandler)(int) = signal(SIGCHLD, SIG_IGN);
+#endif
+
+			signal(SIGINT, handler);
 			/* Handle foreground waiting */
 			wait(&status);
-			signal(SIGINT, SIG_DFL);
+			/* Reset SIGINT to be ignored again */
+			signal(SIGINT, SIG_IGN);
+
+#if SIGDET
+			signal(SIGCHLD, sighandler);
+#endif
 
 			gettimeofday(&cur, NULL);
 
@@ -111,6 +151,22 @@ int main(void) {
 
 		free(input);
 	}
+
+#if SIGDET
+	/* "If the action for the SIGCHLD signal is set to SIG_IGN,
+	 * child processes of the calling processes shall not be transformed into zombie processes when they terminate."
+	 */
+	signal(SIGCHLD, SIG_IGN);
+#endif
+
+	/* Ignore SIGTERM in parent and send it to all child processes */
+	signal(SIGTERM, SIG_IGN);
+	kill(0, SIGTERM);
+
+#if !SIGDET
+	/* Poll and wait for child processes to finish */
+	while (-1 != wait(NULL));
+#endif
 
 	return EXIT_SUCCESS;
 }
