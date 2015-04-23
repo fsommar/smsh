@@ -1,5 +1,6 @@
 #include <sys/types.h> /* defines the type pid_t */
 #include <sys/wait.h> /* defines for instance waitpid() and WIFEXITED */
+#include <signal.h>
 #include <sys/time.h>
 #include <errno.h> /* defines errno */
 #include <unistd.h> /* defines for instance fork(), exec(), pipe() and STDIN_FILENO */
@@ -38,8 +39,16 @@ int exec_commands(const CommandList *);
  * Make sure child processes are killed when parent is by registering signal handlers.
  */
 static struct timeval fg_time;
+pid_t pid;
+
+void handler(int x) {
+	if (SIGINT == x && -1 == kill(pid, SIGKILL)) {
+		perror("kill");
+	}
+}
 
 int main(void) {
+	signal(SIGINT, SIG_IGN);
 
 	for (;;) {
 		/* Declarations at the top */
@@ -83,10 +92,12 @@ int main(void) {
 		}
 
 		if (!commands->bg) {
+			signal(SIGINT, handler);
 			struct timeval cur;
 			uint64_t time_taken;
 			/* Handle foreground waiting */
 			wait(&status);
+			signal(SIGINT, SIG_DFL);
 
 			gettimeofday(&cur, NULL);
 
@@ -196,7 +207,6 @@ int (*builtins_funcs[]) (char **) = {
 #define NUM_BUILTINS ((int) (sizeof(builtins) / sizeof(*builtins)))
 
 int exec_cmd(Command *command) {
-	pid_t pid;
 	int i;
 
 	/* Check for command in builtins first.
@@ -226,7 +236,6 @@ int exec_cmd(Command *command) {
 }
 
 int exec_commands(const CommandList *commands) {
-	pid_t pid;
 	/* Pipes etc etc */
 	pid = fork();
 	if (0 == pid) { /* Start execution as child */
