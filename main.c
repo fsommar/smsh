@@ -224,7 +224,7 @@ int exit_cmd(char **args) {
 }
 
 int cd_cmd(char **args) {
-	char *dir = "~";
+	char *dir = getenv("HOME");
 	if (args[1]) {
 		dir = args[1];
 	}
