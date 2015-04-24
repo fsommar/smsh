@@ -43,7 +43,6 @@ int checkEnv_cmd(char **);
  *
  * Make sure child processes are killed when parent is by registering signal handlers.
  */
-static struct timeval fg_time;
 sigjmp_buf prompt_mark;
 pid_t pid;
 
@@ -139,24 +138,25 @@ int main(void) {
 		}
 
 		if (!commands->bg) {
-			struct timeval cur;
-			uint64_t time_taken;
 			int status;
+			uint64_t time_taken;
+			struct timeval before, after;
 
 #if SIGDET
 			void (*sighandler)(int) = signal(SIGCHLD, SIG_IGN);
 #endif
 
+			gettimeofday(&before, NULL);
 			/* Wait for foreground process */
 			wait(&status);
+			gettimeofday(&after, NULL);
 
 #if SIGDET
 			signal(SIGCHLD, sighandler);
 #endif
 
-			gettimeofday(&cur, NULL);
-
-			time_taken = 1000 * (cur.tv_sec - fg_time.tv_sec) + (cur.tv_usec - fg_time.tv_usec) / 1000;
+			time_taken = 1000 * (after.tv_sec - before.tv_sec) +
+				(after.tv_usec - before.tv_usec) / 1000;
 			printf("%llu ms\n", time_taken);
 
 			/* TODO: Handle freeing for background as well */
@@ -269,7 +269,6 @@ int exec_cmd(Command *command) {
 	 * If it does not exist there then assume it's an existing command. */
 	for (i = 0; i < NUM_BUILTINS; i++) {
 		if (0 == strcmp(command->bin, builtins[i])) {
-			gettimeofday(&fg_time, NULL);
 			return (*builtins_funcs[i])(command->args);
 		}
 	}
@@ -284,7 +283,6 @@ int exec_cmd(Command *command) {
 		perror("fork");
 		return EXIT_FAILURE;
 	} else { /* Continue execution as parent */
-		gettimeofday(&fg_time, NULL);
 		free(command->args);
 		free(command);
 		return EXIT_SUCCESS;
