@@ -158,14 +158,13 @@ int main(void) {
 			time_taken = 1000 * (after.tv_sec - before.tv_sec) +
 				(after.tv_usec - before.tv_usec) / 1000;
 			printf("%llu ms\n", time_taken);
-
-			/* TODO: Handle freeing for background as well */
-			free(commands->cmds);
-			free(commands);
 		}
+
 		/* Clear pid (only used by foreground processes) */
 		pid = 0;
 
+		free(commands->cmds);
+		free(commands);
 		free(input);
 	}
 
@@ -263,10 +262,9 @@ int (*builtins_funcs[]) (char **) = {
 typedef int Pipe[2];
 
 int exec_cmd(Command *command) {
-	int i;
-
 	/* Check for command in builtins first.
 	 * If it does not exist there then assume it's an existing command. */
+	int i;
 	for (i = 0; i < NUM_BUILTINS; i++) {
 		if (0 == strcmp(command->bin, builtins[i])) {
 			return (*builtins_funcs[i])(command->args);
@@ -367,6 +365,7 @@ int exec_commands(const CommandList *commands, const uint32_t cmd_index) {
 
 /* Built in commands */
 int exit_cmd(char **args) {
+	(void) args; /* Workaround for unused variable */
 #if SIGDET
 	/* "If the action for the SIGCHLD signal is set to SIG_IGN,
 	 * child processes of the calling processes shall not be transformed into zombie processes when they terminate."
