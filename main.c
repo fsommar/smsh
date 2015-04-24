@@ -32,6 +32,9 @@ typedef struct {
 CommandList *parse_commands(char *);
 int exec_cmd(Command *);
 int exec_commands(const CommandList *);
+int exit_cmd(char **);
+int cd_cmd(char **);
+int checkEnv_cmd(char **);
 
 /*
  * 1. Read input.
@@ -44,50 +47,64 @@ static struct timeval fg_time;
 sigjmp_buf prompt_mark;
 pid_t pid;
 
-void handler(int sig) {
-	if (SIGINT == sig && -1 == kill(pid, SIGKILL)) {
-		perror("kill");
+void signal_handler(int sig) {
+	pid_t zombie;
+	switch (sig) {
+		case SIGINT:
+			/* Only kill if child */
+			if (0 != pid && -1 == kill(pid, SIGKILL)) {
+				perror("kill");
+			}
+			printf("\n");
+			break;
+		case SIGCHLD:
+			while (0 < (zombie = waitpid(-1, NULL, WNOHANG))) {
+				fprintf(stderr, "%d done\n", (int) zombie);
+			}
+			break;
+		default: return;
 	}
-}
-
-void check_children(int sig) {
-	if (SIGCHLD == sig) {
-		pid_t zombie;
-		while (-1 != (zombie = waitpid(-1, NULL, WNOHANG))) {
-			fprintf(stderr, "%d done\n", (int) zombie);
-		}
-		/* Jump back to prompt */
-		siglongjmp(prompt_mark, 1);
-	}
+	/* Jump back to prompt */
+	siglongjmp(prompt_mark, 1);
 }
 
 int main(void) {
-#if SIGDET
-	/* Register handler for cleanup of background processes */
+	/* Register signal handler */
 	struct sigaction sa;
-	sa.sa_handler = &check_children;
+	sa.sa_handler = &signal_handler;
 	sigemptyset(&sa.sa_mask);
 	sa.sa_flags = SA_NOCLDSTOP;
+
+#if SIGDET
+	/* This is for cleanup of background processes */
 	if (-1 == sigaction(SIGCHLD, &sa, NULL)) {
 		perror("sigaction");
 		exit(EXIT_FAILURE);
 	}
 #endif
+	if (-1 == sigaction(SIGINT, &sa, NULL)) {
+		perror("sigaction");
+		exit(EXIT_FAILURE);
+	}
 
-	/* Ignore interrupt signal */
-	signal(SIGINT, SIG_IGN);
-
-	/* Set prompt mark here */
+	/* Set prompt mark here for jumping to from the signal handler */
 	while (0 != sigsetjmp(prompt_mark, 1));
 
 	for (;;) {
-		/* Declarations at the top */
-		int status;
 		char prompt[90];
 		char *input;
 		char history[1024];
 		const char *path = getcwd(NULL, 80);
 		CommandList *commands;
+
+#if !SIGDET
+		/* Check for completed child processes */
+		pid_t zombie;
+		while (0 < (zombie = waitpid(0, NULL, WNOHANG))) {
+			printf("%d done\n", (int) zombie);
+		}
+		fflush(stdout);
+#endif
 
 		strcpy(prompt, path);
 		strcat(prompt, " ¥ ");
@@ -124,16 +141,14 @@ int main(void) {
 		if (!commands->bg) {
 			struct timeval cur;
 			uint64_t time_taken;
+			int status;
 
 #if SIGDET
 			void (*sighandler)(int) = signal(SIGCHLD, SIG_IGN);
 #endif
 
-			signal(SIGINT, handler);
-			/* Handle foreground waiting */
+			/* Wait for foreground process */
 			wait(&status);
-			/* Reset SIGINT to be ignored again */
-			signal(SIGINT, SIG_IGN);
 
 #if SIGDET
 			signal(SIGCHLD, sighandler);
@@ -148,27 +163,13 @@ int main(void) {
 			free(commands->cmds);
 			free(commands);
 		}
+		/* Clear pid (only used by foreground processes) */
+		pid = 0;
 
 		free(input);
 	}
 
-#if SIGDET
-	/* "If the action for the SIGCHLD signal is set to SIG_IGN,
-	 * child processes of the calling processes shall not be transformed into zombie processes when they terminate."
-	 */
-	signal(SIGCHLD, SIG_IGN);
-#endif
-
-	/* Ignore SIGTERM in parent and send it to all child processes */
-	signal(SIGTERM, SIG_IGN);
-	kill(0, SIGTERM);
-
-#if !SIGDET
-	/* Poll and wait for child processes to finish */
-	while (-1 != wait(NULL));
-#endif
-
-	return EXIT_SUCCESS;
+	return exit_cmd(NULL);
 }
 
 CommandList *parse_commands(char *input) {
@@ -244,10 +245,6 @@ CommandList *parse_commands(char *input) {
 	return commands;
 }
 
-int exit_cmd(char **);
-int cd_cmd(char **);
-int checkEnv_cmd(char **);
-
 const char *builtins[] = {
 	"exit",
 	"cd",
@@ -308,7 +305,22 @@ int exec_commands(const CommandList *commands) {
 
 /* Built in commands */
 int exit_cmd(char **args) {
-	/* TODO: Cleanup child processes? */
+#if SIGDET
+	/* "If the action for the SIGCHLD signal is set to SIG_IGN,
+	 * child processes of the calling processes shall not be transformed into zombie processes when they terminate."
+	 */
+	signal(SIGCHLD, SIG_IGN);
+#endif
+
+	/* Ignore SIGTERM in parent and send it to all child processes */
+	signal(SIGTERM, SIG_IGN);
+	kill(0, SIGTERM);
+
+#if !SIGDET
+	/* Poll and wait for child processes to finish */
+	while (-1 != wait(NULL));
+#endif
+
 	exit(EXIT_SUCCESS);
 }
 
