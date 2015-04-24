@@ -31,7 +31,7 @@ typedef struct {
 
 CommandList *parse_commands(char *);
 int exec_cmd(Command *);
-int exec_commands(const CommandList *);
+int exec_commands(const CommandList *, const uint32_t);
 int exit_cmd(char **);
 int cd_cmd(char **);
 int checkEnv_cmd(char **);
@@ -135,7 +135,7 @@ int main(void) {
 			}
 		} else {
 			/* Commands were piped, handle it accordingly */
-			exec_commands(commands);
+			exec_commands(commands, 0);
 		}
 
 		if (!commands->bg) {
@@ -258,6 +258,9 @@ int (*builtins_funcs[]) (char **) = {
 };
 
 #define NUM_BUILTINS ((int) (sizeof(builtins) / sizeof(*builtins)))
+#define PIPE_READ_SIDE (0)
+#define PIPE_WRITE_SIDE (1)
+typedef int Pipe[2];
 
 int exec_cmd(Command *command) {
 	int i;
@@ -288,17 +291,78 @@ int exec_cmd(Command *command) {
 	}
 }
 
-int exec_commands(const CommandList *commands) {
-	/* Pipes etc etc */
-	pid = fork();
+int exec_commands(const CommandList *commands, const uint32_t cmd_index) {
+	pid_t pid;
+	Pipe pipefd;
+	int status, ret_val;
+
+	/* Create a new pipe for every command except first and last */
+	if (cmd_index != 0 || !(cmd_index >= commands->length)) {
+		if (-1 == pipe(pipefd)) {
+			perror("pipe");
+			return EXIT_FAILURE;
+		}
+	}
+
+	/* Fork every process except for the last */
+	if (!(cmd_index >= commands->length)) {
+		pid = fork();
+		if (-1 == pid) {
+			perror("fork");
+			return EXIT_FAILURE;
+		}
+	} else { /* Last process should write to STDOUT */
+		return execvp(commands->cmds[cmd_index - 1]->bin, commands->cmds[cmd_index - 1]->args);
+	}
+
 	if (0 == pid) { /* Start execution as child */
-		return execvp(commands->cmds[0]->bin, commands->cmds[0]->args);
-	} else if (-1 == pid) { /* Error handling */
-		perror("fork");
-		return EXIT_FAILURE;
-	} else { /* Continue execution as parent */
-		/* TODO: free all commands after piping and forking */
-		printf("TODO: Pipe multiple commands.\n");
+
+		if (0 != cmd_index) { /* All but the first child reads from pipe */
+			ret_val = dup2(pipefd[PIPE_READ_SIDE], STDIN_FILENO);
+
+			if (-1 == ret_val) {
+				perror("dup2");
+				return EXIT_FAILURE;
+			}
+			/* Pipe closing failures */
+			if (-1 == close(pipefd[PIPE_READ_SIDE])) {
+				perror("close pipe read side");
+				return EXIT_FAILURE;
+			}
+			if (-1 == close(pipefd[PIPE_WRITE_SIDE])) {
+				perror("close pipe write side");
+				return EXIT_FAILURE;
+			}
+		}
+
+		ret_val = exec_commands(commands, cmd_index + 1);
+		wait(&status);
+		return ret_val;
+	}
+	/* Continue execution as parent */
+
+	if (0 != cmd_index) { /* All but the first parent writes to pipe */
+		ret_val = dup2(pipefd[PIPE_WRITE_SIDE], STDOUT_FILENO);
+
+		if (-1 == ret_val) {
+			perror("dup2");
+			return EXIT_FAILURE;
+		}
+		/* Pipe closing failures */
+		if (-1 == close(pipefd[PIPE_READ_SIDE])) {
+			perror("close pipe read side");
+			return EXIT_FAILURE;
+		}
+		if (-1 == close(pipefd[PIPE_WRITE_SIDE])) {
+			perror("close pipe write side");
+			return EXIT_FAILURE;
+		}
+	}
+
+	if (0 != cmd_index) { /* All but the first parent executes a process */
+		return execvp(commands->cmds[cmd_index - 1]->bin, commands->cmds[cmd_index - 1]->args);
+	} else {
+		wait(&status);
 		return EXIT_SUCCESS;
 	}
 }
