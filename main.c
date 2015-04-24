@@ -32,6 +32,7 @@ typedef struct {
 CommandList *parse_commands(char *);
 int exec_cmd(Command *);
 int exec_commands(const CommandList *, const uint32_t);
+int run_cmd(Command *);
 int exit_cmd(char **);
 int cd_cmd(char **);
 int checkEnv_cmd(char **);
@@ -273,18 +274,25 @@ int exec_cmd(Command *command) {
 
 	/* Fork the process and execute the command on the child process */
 	pid = fork();
-	if (0 == pid) { /* Start execution as child */
-		execvp(command->bin, command->args);
-		perror(SMSH);
-		return EXIT_FAILURE;
-	} else if (-1 == pid) { /* Error handling */
+	if (-1 == pid) { /* Error handling */
 		perror("fork");
 		return EXIT_FAILURE;
-	} else { /* Continue execution as parent */
-		free(command->args);
-		free(command);
-		return EXIT_SUCCESS;
 	}
+
+	if (0 == pid) { /* Start execution as child */
+		return run_cmd(command);
+	}
+
+	/* Continue execution as parent */
+	free(command->args);
+	free(command);
+	return EXIT_SUCCESS;
+}
+
+int run_cmd(Command *command) {
+	execvp(command->bin, command->args);
+	perror(SMSH);
+	return EXIT_FAILURE;
 }
 
 int exec_commands(const CommandList *commands, const uint32_t cmd_index) {
@@ -308,7 +316,7 @@ int exec_commands(const CommandList *commands, const uint32_t cmd_index) {
 			return EXIT_FAILURE;
 		}
 	} else { /* Last process should write to STDOUT */
-		return execvp(commands->cmds[cmd_index - 1]->bin, commands->cmds[cmd_index - 1]->args);
+		return run_cmd(commands->cmds[cmd_index - 1]);
 	}
 
 	if (0 == pid) { /* Start execution as child */
@@ -356,7 +364,7 @@ int exec_commands(const CommandList *commands, const uint32_t cmd_index) {
 	}
 
 	if (0 != cmd_index) { /* All but the first parent executes a process */
-		return execvp(commands->cmds[cmd_index - 1]->bin, commands->cmds[cmd_index - 1]->args);
+		return run_cmd(commands->cmds[cmd_index - 1]);
 	} else {
 		wait(&status);
 		return EXIT_SUCCESS;
