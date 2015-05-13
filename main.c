@@ -31,8 +31,8 @@ typedef struct {
 
 CommandList *parse_commands(char *);
 int exec_cmd(Command *);
-int exec_commands(const CommandList *, const uint32_t);
-int run_cmd(Command *);
+int exec_commands(const CommandList *, const uint32_t, const int);
+int run_cmd(const Command *);
 int exit_cmd(char **);
 int cd_cmd(char **);
 int checkEnv_cmd(char **);
@@ -58,8 +58,8 @@ void signal_handler(int sig) {
 			printf("\n");
 			break;
 		case SIGCHLD:
-			while (0 < (zombie = waitpid(-1, NULL, WNOHANG))) {
-				fprintf(stderr, "%d done\n", (int) zombie);
+			while (0 < (zombie = waitpid(0, NULL, WNOHANG))) {
+				printf("%d done\n", (int) zombie);
 			}
 			break;
 		default: return;
@@ -96,6 +96,7 @@ int main(void) {
 		char history[1024];
 		const char *path = getcwd(NULL, 80);
 		CommandList *commands;
+		struct timeval before, after;
 
 #if !SIGDET
 		/* Check for completed child processes */
@@ -128,6 +129,7 @@ int main(void) {
 
 		add_history(history);
 
+		gettimeofday(&before, NULL);
 		if (commands->length == 1) {
 			if (EXIT_SUCCESS != exec_cmd(commands->cmds[0])) {
 				/* Execute failed */
@@ -135,30 +137,27 @@ int main(void) {
 			}
 		} else {
 			/* Commands were piped, handle it accordingly */
-			exec_commands(commands, 0);
+			exec_commands(commands, 0, STDIN_FILENO);
 		}
 
 		if (!commands->bg) {
-			int status;
 			uint64_t time_taken;
-			struct timeval before, after;
 
 #if SIGDET
 			void (*sighandler)(int) = signal(SIGCHLD, SIG_IGN);
 #endif
 
-			gettimeofday(&before, NULL);
-			/* Wait for foreground process */
-			wait(&status);
+			/* Wait for foreground process(es) */
+			while (-1 != waitpid(-1, NULL, 0) || ECHILD != errno);
 			gettimeofday(&after, NULL);
-
-#if SIGDET
-			signal(SIGCHLD, sighandler);
-#endif
 
 			time_taken = 1000 * (after.tv_sec - before.tv_sec) +
 				(after.tv_usec - before.tv_usec) / 1000;
 			printf("%llu ms\n", time_taken);
+
+#if SIGDET
+			signal(SIGCHLD, sighandler);
+#endif
 		}
 
 		/* Clear pid (only used by foreground processes) */
@@ -216,7 +215,7 @@ CommandList *parse_commands(char *input) {
 					args_buf_len += 2;
 					command->args = realloc(command->args, args_buf_len * sizeof(*command->args));
 					if (!command->args) {
-						perror("realloc fail");
+						perror("realloc");
 						exit(EXIT_FAILURE);
 					}
 				}
@@ -233,7 +232,7 @@ CommandList *parse_commands(char *input) {
 			cmds_buf_len += 2;
 			commands->cmds = realloc(commands->cmds, cmds_buf_len * sizeof(*commands->cmds));
 			if (!commands->cmds) {
-				perror("realloc fail");
+				perror("realloc");
 				exit(EXIT_FAILURE);
 			}
 		}
@@ -260,6 +259,11 @@ int (*builtins_funcs[]) (char **) = {
 #define NUM_BUILTINS ((int) (sizeof(builtins) / sizeof(*builtins)))
 #define PIPE_READ_SIDE (0)
 #define PIPE_WRITE_SIDE (1)
+#define TRY(syscall, str) \
+if (-1 == (syscall)) { \
+	perror(str); \
+	return EXIT_FAILURE; \
+}
 typedef int Pipe[2];
 
 int exec_cmd(Command *command) {
@@ -289,86 +293,51 @@ int exec_cmd(Command *command) {
 	return EXIT_SUCCESS;
 }
 
-int run_cmd(Command *command) {
+int run_cmd(const Command *command) {
 	execvp(command->bin, command->args);
+	/* If we end up here an error has occurred */
 	perror(SMSH);
 	return EXIT_FAILURE;
 }
 
-int exec_commands(const CommandList *commands, const uint32_t cmd_index) {
-	pid_t pid;
+
+int exec_commands(const CommandList *commands, const uint32_t cmd_index, const int fd_in) {
 	Pipe pipefd;
-	int status, ret_val;
 
-	/* Create a new pipe for every command except first and last */
-	if (cmd_index != 0 || !(cmd_index >= commands->length)) {
-		if (-1 == pipe(pipefd)) {
-			perror("pipe");
-			return EXIT_FAILURE;
-		}
-	}
-
-	/* Fork every process except for the last */
-	if (!(cmd_index >= commands->length)) {
-		pid = fork();
-		if (-1 == pid) {
-			perror("fork");
-			return EXIT_FAILURE;
-		}
-	} else { /* Last process should write to STDOUT */
-		return run_cmd(commands->cmds[cmd_index - 1]);
-	}
-
-	if (0 == pid) { /* Start execution as child */
-
-		if (0 != cmd_index) { /* All but the first child reads from pipe */
-			ret_val = dup2(pipefd[PIPE_READ_SIDE], STDIN_FILENO);
-
-			if (-1 == ret_val) {
-				perror("dup2");
-				return EXIT_FAILURE;
-			}
-			/* Pipe closing failures */
-			if (-1 == close(pipefd[PIPE_READ_SIDE])) {
-				perror("close pipe read side");
-				return EXIT_FAILURE;
-			}
-			if (-1 == close(pipefd[PIPE_WRITE_SIDE])) {
-				perror("close pipe write side");
-				return EXIT_FAILURE;
-			}
+	if (cmd_index == commands->length - 1) {
+		TRY(pid = fork(), "fork");
+		if (0 == pid) {
+			TRY(dup2(fd_in, STDIN_FILENO), "dup2");
+			TRY(close(fd_in), "previous FD");
+			return run_cmd(commands->cmds[cmd_index]);
 		}
 
-		ret_val = exec_commands(commands, cmd_index + 1);
-		wait(&status);
-		return ret_val;
-	}
-	/* Continue execution as parent */
-
-	if (0 != cmd_index) { /* All but the first parent writes to pipe */
-		ret_val = dup2(pipefd[PIPE_WRITE_SIDE], STDOUT_FILENO);
-
-		if (-1 == ret_val) {
-			perror("dup2");
-			return EXIT_FAILURE;
-		}
-		/* Pipe closing failures */
-		if (-1 == close(pipefd[PIPE_READ_SIDE])) {
-			perror("close pipe read side");
-			return EXIT_FAILURE;
-		}
-		if (-1 == close(pipefd[PIPE_WRITE_SIDE])) {
-			perror("close pipe write side");
-			return EXIT_FAILURE;
-		}
-	}
-
-	if (0 != cmd_index) { /* All but the first parent executes a process */
-		return run_cmd(commands->cmds[cmd_index - 1]);
-	} else {
-		wait(&status);
+		TRY(close(fd_in), "previous FD")
 		return EXIT_SUCCESS;
 	}
+
+	TRY(pipe(pipefd), "pipe");
+	TRY(pid = fork(), "fork");
+
+	if (0 == pid) {
+		if (fd_in != STDIN_FILENO) {
+			TRY(dup2(fd_in, STDIN_FILENO), "dup2");
+			TRY(close(fd_in), "previous FD");
+		}
+
+		TRY(dup2(pipefd[PIPE_WRITE_SIDE], STDOUT_FILENO), "dup2");
+		TRY(close(pipefd[PIPE_WRITE_SIDE]), "pipe write");
+		TRY(close(pipefd[PIPE_READ_SIDE]), "pipe read");
+
+		return run_cmd(commands->cmds[cmd_index]);
+	}
+
+	TRY(close(pipefd[PIPE_WRITE_SIDE]), "pipe write");
+	if (fd_in != STDIN_FILENO) {
+		TRY(close(fd_in), "previous FD");
+	}
+
+	return exec_commands(commands, cmd_index + 1, pipefd[PIPE_READ_SIDE]);
 }
 
 /* Built in commands */
@@ -376,7 +345,8 @@ int exit_cmd(char **args) {
 	(void) args; /* Workaround for unused variable */
 #if SIGDET
 	/* "If the action for the SIGCHLD signal is set to SIG_IGN,
-	 * child processes of the calling processes shall not be transformed into zombie processes when they terminate."
+	 * child processes of the calling processes shall
+	 * not be transformed into zombie processes when they terminate."
 	 */
 	signal(SIGCHLD, SIG_IGN);
 #endif
@@ -387,7 +357,7 @@ int exit_cmd(char **args) {
 
 #if !SIGDET
 	/* Poll and wait for child processes to finish */
-	while (-1 != wait(NULL));
+	while (-1 != waitpid(-1, NULL, 0));
 #endif
 
 	exit(EXIT_SUCCESS);
