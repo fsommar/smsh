@@ -1,3 +1,5 @@
+#define _POSIX_SOURCE (200809L)
+#include <inttypes.h>
 #include <sys/types.h> /* defines the type pid_t */
 #include <sys/wait.h> /* defines for instance waitpid() and WIFEXITED */
 #include <signal.h>
@@ -11,8 +13,8 @@
 #include <stdint.h>
 #include <setjmp.h>
 #include <readline/readline.h>
+#include <readline/history.h>
 
-extern char *strtok_r(char *, const char *, char **);
 #define SMSH ("smsh")
 #define SIGDET 1
 
@@ -153,7 +155,7 @@ int main(void) {
 
 			time_taken = 1000 * (after.tv_sec - before.tv_sec) +
 				(after.tv_usec - before.tv_usec) / 1000;
-			printf("%llu ms\n", time_taken);
+			printf("%" PRIu64 " ms\n", time_taken);
 
 #if SIGDET
 			signal(SIGCHLD, sighandler);
