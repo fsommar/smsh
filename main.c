@@ -15,6 +15,10 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
+#ifndef strtok_r
+extern char *strtok_r(char *, const char *, char **);
+#endif
+
 #define SMSH ("smsh")
 #define SIGDET 1
 
