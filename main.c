@@ -315,6 +315,19 @@ int exec_commands(const CommandList *commands, const uint32_t cmd_index, const i
 		if (0 == pid) {
 			TRY(dup2(fd_in, STDIN_FILENO), "dup2");
 			TRY(close(fd_in), "previous FD");
+			/* Hack for making pager work */
+			if (0 == strcmp(commands->cmds[cmd_index]->bin, "pager")) {
+				const char *pager = getenv("PAGER");
+				if (NULL != pager) {
+					execlp(pager, pager, (char *) NULL);
+					perror(SMSH);
+				}
+				execlp("less", "less", (char *) NULL);
+				perror(SMSH);
+				execlp("more", "more", (char *) NULL);
+				perror(SMSH);
+				return EXIT_FAILURE;
+			}
 			return run_cmd(commands->cmds[cmd_index]);
 		}
 
@@ -380,6 +393,44 @@ int cd_cmd(char **args) {
 	return EXIT_SUCCESS;
 }
 
+#define CREATE_COMMAND(cmd) \
+cmd = malloc(sizeof(*cmd)); \
+cmd->num_args = 1; \
+cmd->bin = cmd ## _ ## s; \
+cmd->args = malloc(sizeof(*cmd->args)); \
+cmd->args[0] = cmd ## _ ## s; \
+command_list->cmds[command_list->length++] = cmd;
+
 int checkEnv_cmd(char **args) {
-	exit(EXIT_SUCCESS);
+	CommandList *command_list;
+	Command *printenv, *grep, *sort, *pager;
+
+	char *printenv_s = "printenv";
+	char *sort_s = "sort";
+	char *pager_s = "pager";
+
+	command_list = malloc(sizeof(*command_list));
+	command_list->bg = false;
+	command_list->length = 0;
+
+	command_list->cmds = calloc(args[1] ? 4 : 3, sizeof(*command_list->cmds));
+
+	CREATE_COMMAND(printenv);
+
+	if (args[1]) {
+		char *grep_s = "grep";
+		args[0] = grep_s;
+		grep = malloc(sizeof(*grep));
+		while (args[grep->num_args - 1]) {
+			grep->num_args++;
+		}
+		grep->bin = grep_s;
+		grep->args = args;
+		command_list->cmds[command_list->length++] = grep;
+	}
+
+	CREATE_COMMAND(sort);
+	CREATE_COMMAND(pager);
+
+	return exec_commands(command_list, 0, STDIN_FILENO);
 }
