@@ -279,7 +279,7 @@ int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_
 			/* Hard code support for the `pager` command in pipes */
 			if (0 == strcmp(commands->cmds[cmd_index]->args[0], "pager")) {
 				const char *pager = getenv("PAGER");
-				if (NULL != pager) {
+				if (pager) {
 					execlp(pager, pager, (char *) NULL);
 					perror(SMSH);
 				}
@@ -367,19 +367,20 @@ int cd_cmd(char **args) {
 #define CREATE_COMMAND(cmd) \
 cmd = malloc(sizeof(*cmd)); \
 cmd->num_args = 1; \
-cmd->args = malloc(sizeof(*cmd->args)); \
-cmd->args[0] = cmd ## _ ## s; \
+cmd->args = calloc(2, sizeof(*cmd->args)); \
+cmd->args[0] = (char *) cmd ## _ ## s; \
 command_list->cmds[command_list->length++] = cmd;
+
+static const char *printenv_s = "printenv";
+static const char *sort_s = "sort";
+static const char *pager_s = "pager";
+static const char *grep_s = "grep";
 
 /* The built-in checkEnv command */
 int checkEnv_cmd(char **args) {
 	int ret_val;
 	CommandList *command_list;
 	Command *printenv, *grep, *sort, *pager;
-
-	char *printenv_s = "printenv";
-	char *sort_s = "sort";
-	char *pager_s = "pager";
 
 	command_list = malloc(sizeof(*command_list));
 	command_list->bg = false;
@@ -392,8 +393,7 @@ int checkEnv_cmd(char **args) {
 	/* If an argument is passed to checkEnv, pipe printenv into
 	 * grep with the supplied arguments. */
 	if (args[1]) {
-		char *grep_s = "grep";
-		args[0] = grep_s;
+		args[0] = (char *) grep_s;
 		grep = malloc(sizeof(*grep));
 		while (args[grep->num_args - 1]) {
 			grep->num_args++;
