@@ -1,3 +1,4 @@
+#define _POSIX_SOURCE (200809L)
 #include <inttypes.h>
 #include <sys/types.h> /* defines the type pid_t */
 #include <sys/wait.h> /* defines for instance waitpid() and WIFEXITED */
