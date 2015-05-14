@@ -7,24 +7,31 @@
  *
  * Make sure child processes are killed when parent is by registering signal handlers.
  */
-sigjmp_buf prompt_mark;
-pid_t pid;
+static sigjmp_buf prompt_mark;
+static volatile sig_atomic_t bg_killed = 0;
+static pid_t pid = 0;
 
 void signal_handler(int sig) {
-	pid_t zombie;
 	switch (sig) {
 		case SIGINT:
 			/* Only kill if child */
 			if (0 != pid && -1 == kill(pid, SIGKILL)) {
-				perror("kill");
+				/* Child couldn't be killed, but perror can't be used here
+				 * because it is not safe for use in a signal handler.
+				 * The error is purposefully ignored. */
 			}
-			printf("\n");
+			if (-1 == write(STDOUT_FILENO, "\n", 1)) {
+				/* The newline couldn't be printed.
+				 * Like above, perror can't be used and because the newline
+				 * isn't vital this error is purposefully ignored. */
+			}
 			break;
 		case SIGCHLD:
-			/* This will only run when SIGDET=1 */
-			while (0 < (zombie = waitpid(0, NULL, WNOHANG))) {
-				printf("%d done\n", (int) zombie);
-			}
+			/* This will only run when SIGDET=1. */
+			/* Previously, the terminated background processes were
+			 * printed here. However, because printf is not safe for use in a signal
+			 * handler, it was updated to use a flag instead. */
+			bg_killed = 1;
 			break;
 		default: return;
 	}
@@ -52,37 +59,55 @@ int main(void) {
 	/* Loop forever, reading user input */
 	for (;;) {
 		char prompt[90];
-		char *input;
+		char *input, *path;
 		char history[1024];
-		char *path = getcwd(NULL, 80);
 		CommandList *commands;
 		struct timeval before, after;
+		/* Check bg processes if pid is 0,
+		 * i.e. pid is not a foreground process */
+		bool check_bg = (0 == pid), fg_process = false;
 
-#if !SIGDET
-		/* Check for completed child processes */
-		pid_t zombie;
-		while (0 < (zombie = waitpid(0, NULL, WNOHANG))) {
-			printf("%d done\n", (int) zombie);
-		}
-		fflush(stdout);
+		sighold(SIGINT);
+		/* Assume the length of CWD is never greater than 80 characters */
+		path = getcwd(NULL, 80);
+
+#if SIGDET
+		check_bg = check_bg && !!bg_killed;
+		bg_killed = 0;
 #endif
 
+		if (check_bg) {
+			/* Check for completed child processes */
+			pid_t zombie;
+			while (0 < (zombie = waitpid(0, NULL, WNOHANG))) {
+				printf("%d done\n", (int) zombie);
+			}
+			fflush(stdout);
+		}
+
 		strcpy(prompt, path);
+		free(path);
 		strcat(prompt, " ¥ ");
+		sigrelse(SIGINT);
 
 		/* input is allocated in readline.
 		 * it's the callee's (our) obligation to free it */
 		input = readline(prompt);
-		free(path);
+		/* On e.g. Ctrl-D the input is null and the shell is exited */
 		if (!input) break;
+
+		/* ENTERING CRITICAL AREA */
+		sighold(SIGINT);
+
 		/* parse_commands modifies input - copy and save for adding to history */
 		strcpy(history, input);
+		free(input);
 
 		/* 2. Parse arguments into commands. */
-		commands = parse_commands(input);
+		commands = parse_commands(history);
 
 		if (!commands) {
-			free(input);
+			sigrelse(SIGINT);
 			continue;
 		}
 		if (0 == commands->length) {
@@ -93,23 +118,28 @@ int main(void) {
 		/* Add command line history for the user's convenience */
 		add_history(history);
 
+		fg_process = !commands->bg;
+
 		gettimeofday(&before, NULL);
 		if (1 == commands->length) {
 			if (EXIT_SUCCESS != exec_cmd(commands->cmds[0])) {
-				/* Execute failed */
-				goto next;
+				/* Execute of command failed */
+				fg_process = false;
 			}
 		} else {
 			/* Commands were piped, handle it accordingly */
 			exec_commands(commands, 0, STDIN_FILENO);
 		}
 
-		if (!commands->bg) {
+next:
+		free(commands->cmds);
+		free(commands);
+		sigrelse(SIGINT);
+
+		if (fg_process) {
 			uint64_t time_taken;
 
-#if SIGDET
-			void (*sighandler)(int) = signal(SIGCHLD, SIG_IGN);
-#endif
+			sighold(SIGCHLD);
 
 			/* Wait for foreground process(es) */
 			while (-1 != waitpid(-1, NULL, 0) || ECHILD != errno);
@@ -119,17 +149,11 @@ int main(void) {
 				(after.tv_usec - before.tv_usec) / 1000;
 			printf("%" PRIu64 " ms\n", time_taken);
 
-#if SIGDET
-			signal(SIGCHLD, sighandler);
-#endif
+			sigrelse(SIGCHLD);
 		}
 
-next:
 		/* Clear pid (only used by foreground processes) */
 		pid = 0;
-		free(commands->cmds);
-		free(commands);
-		free(input);
 	}
 
 	/* Call exit command on exit to clean up child processes */
