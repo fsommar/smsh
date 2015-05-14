@@ -20,7 +20,6 @@ extern char *strtok_r(char *, const char *, char **);
 #endif
 
 #define SMSH ("smsh")
-#define SIGDET 1
 
 /* e.g. "ls -aHpl" */
 typedef struct {
@@ -37,8 +36,8 @@ typedef struct {
 
 CommandList *parse_commands(char *);
 int exec_cmd(Command *);
-int exec_commands(const CommandList *, const uint32_t, const int);
-int run_cmd(const Command *);
+int exec_commands(CommandList *, const uint32_t, const int);
+int run_cmd(Command *);
 int exit_cmd(char **);
 int cd_cmd(char **);
 int checkEnv_cmd(char **);
@@ -100,7 +99,7 @@ int main(void) {
 		char prompt[90];
 		char *input;
 		char history[1024];
-		const char *path = getcwd(NULL, 80);
+		char *path = getcwd(NULL, 80);
 		CommandList *commands;
 		struct timeval before, after;
 
@@ -119,6 +118,7 @@ int main(void) {
 		/* input is allocated in readline.
 		 * it's the callee's (our) obligation to free it */
 		input = readline(prompt);
+		free(path);
 		if (!input) break;
 		/* parse_commands modifies input - copy and save for adding to history */
 		strcpy(history, input);
@@ -126,20 +126,21 @@ int main(void) {
 		/* 2. Parse arguments into commands. */
 		commands = parse_commands(input);
 
-		if (!commands) { continue; }
-		if (commands->length == 0) {
-			free(commands->cmds);
-			free(commands);
+		if (!commands) {
+			free(input);
 			continue;
+		}
+		if (0 == commands->length) {
+			goto next;
 		}
 
 		add_history(history);
 
 		gettimeofday(&before, NULL);
-		if (commands->length == 1) {
+		if (1 == commands->length) {
 			if (EXIT_SUCCESS != exec_cmd(commands->cmds[0])) {
 				/* Execute failed */
-				continue;
+				goto next;
 			}
 		} else {
 			/* Commands were piped, handle it accordingly */
@@ -166,9 +167,9 @@ int main(void) {
 #endif
 		}
 
+next:
 		/* Clear pid (only used by foreground processes) */
 		pid = 0;
-
 		free(commands->cmds);
 		free(commands);
 		free(input);
@@ -278,7 +279,10 @@ int exec_cmd(Command *command) {
 	int i;
 	for (i = 0; i < NUM_BUILTINS; i++) {
 		if (0 == strcmp(command->bin, builtins[i])) {
-			return (*builtins_funcs[i])(command->args);
+			int ret_val = (*builtins_funcs[i])(command->args);
+			free(command->args);
+			free(command);
+			return ret_val;
 		}
 	}
 
@@ -299,25 +303,28 @@ int exec_cmd(Command *command) {
 	return EXIT_SUCCESS;
 }
 
-int run_cmd(const Command *command) {
+int run_cmd(Command *command) {
 	execvp(command->bin, command->args);
 	/* If we end up here an error has occurred */
 	perror(SMSH);
+	free(command->args);
+	free(command);
 	return EXIT_FAILURE;
 }
 
 
-int exec_commands(const CommandList *commands, const uint32_t cmd_index, const int fd_in) {
+int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_in) {
 	Pipe pipefd;
 
 	if (cmd_index == commands->length - 1) {
+		uint32_t i;
 		TRY(pid = fork(), "fork");
 		if (0 == pid) {
 			TRY(dup2(fd_in, STDIN_FILENO), "dup2");
 			TRY(close(fd_in), "previous FD");
 			/* Hack for making pager work */
 			if (0 == strcmp(commands->cmds[cmd_index]->bin, "pager")) {
-				const char *pager = getenv("PAGER");
+				char *pager = getenv("PAGER");
 				if (NULL != pager) {
 					execlp(pager, pager, (char *) NULL);
 					perror(SMSH);
@@ -326,12 +333,18 @@ int exec_commands(const CommandList *commands, const uint32_t cmd_index, const i
 				perror(SMSH);
 				execlp("more", "more", (char *) NULL);
 				perror(SMSH);
+				free(pager);
 				return EXIT_FAILURE;
 			}
 			return run_cmd(commands->cmds[cmd_index]);
 		}
 
 		TRY(close(fd_in), "previous FD")
+
+		for (i = 0; i < commands->length; i++) {
+			free(commands->cmds[i]->args);
+			free(commands->cmds[i]);
+		}
 		return EXIT_SUCCESS;
 	}
 
@@ -383,7 +396,7 @@ int exit_cmd(char **args) {
 }
 
 int cd_cmd(char **args) {
-	char *dir = getenv("HOME");
+	const char *dir = getenv("HOME");
 	if (args[1]) {
 		dir = args[1];
 	}
@@ -402,6 +415,7 @@ cmd->args[0] = cmd ## _ ## s; \
 command_list->cmds[command_list->length++] = cmd;
 
 int checkEnv_cmd(char **args) {
+	int ret_val;
 	CommandList *command_list;
 	Command *printenv, *grep, *sort, *pager;
 
@@ -432,5 +446,8 @@ int checkEnv_cmd(char **args) {
 	CREATE_COMMAND(sort);
 	CREATE_COMMAND(pager);
 
-	return exec_commands(command_list, 0, STDIN_FILENO);
+	ret_val = exec_commands(command_list, 0, STDIN_FILENO);
+	free(command_list->cmds);
+	free(command_list);
+	return ret_val;
 }
