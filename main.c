@@ -1,46 +1,4 @@
-#define _POSIX_SOURCE (200809L)
-#include <inttypes.h>
-#include <sys/types.h> /* defines the type pid_t */
-#include <sys/wait.h> /* defines for instance waitpid() and WIFEXITED */
-#include <signal.h>
-#include <sys/time.h>
-#include <errno.h> /* defines errno */
-#include <unistd.h> /* defines for instance fork(), exec(), pipe() and STDIN_FILENO */
-#include <stdlib.h> /* defines for instance malloc(), free(), exit(), rand() and RAND_MAX */
-#include <stdio.h> /* defines for instance stderr and perror() */
-#include <string.h> /* defines strcmp() and strtok() */
-#include <stdbool.h>
-#include <stdint.h>
-#include <setjmp.h>
-#include <readline/readline.h>
-#include <readline/history.h>
-
-#ifndef strtok_r
-extern char *strtok_r(char *, const char *, char **);
-#endif
-
-#define SMSH ("smsh")
-
-/* e.g. "ls -aHpl" */
-typedef struct {
-	uint32_t num_args; /* 2 */
-	char *bin; /* "ls" */
-	char **args; /* ["ls", "-aHpl", NULL] */
-} Command;
-
-typedef struct {
-	uint32_t length;
-	Command **cmds;
-	bool bg;
-} CommandList;
-
-CommandList *parse_commands(char *);
-int exec_cmd(Command *);
-int exec_commands(CommandList *, const uint32_t, const int);
-int run_cmd(Command *);
-int exit_cmd(char **);
-int cd_cmd(char **);
-int checkEnv_cmd(char **);
+#include "main.h"
 
 /*
  * 1. Read input.
@@ -63,6 +21,7 @@ void signal_handler(int sig) {
 			printf("\n");
 			break;
 		case SIGCHLD:
+			/* This will only run when SIGDET=1 */
 			while (0 < (zombie = waitpid(0, NULL, WNOHANG))) {
 				printf("%d done\n", (int) zombie);
 			}
@@ -82,19 +41,15 @@ int main(void) {
 
 #if SIGDET
 	/* This is for cleanup of background processes */
-	if (-1 == sigaction(SIGCHLD, &sa, NULL)) {
-		perror("sigaction");
-		exit(EXIT_FAILURE);
-	}
+	TRY(sigaction(SIGCHLD, &sa, NULL), "sigaction");
 #endif
-	if (-1 == sigaction(SIGINT, &sa, NULL)) {
-		perror("sigaction");
-		exit(EXIT_FAILURE);
-	}
+	/* Intercept SIGINT for parent and pass it to child */
+	TRY(sigaction(SIGINT, &sa, NULL), "sigaction");
 
 	/* Set prompt mark here for jumping to from the signal handler */
 	while (0 != sigsetjmp(prompt_mark, 1));
 
+	/* Loop forever, reading user input */
 	for (;;) {
 		char prompt[90];
 		char *input;
@@ -131,9 +86,11 @@ int main(void) {
 			continue;
 		}
 		if (0 == commands->length) {
+			/* For some reason an empty command was received. */
 			goto next;
 		}
 
+		/* Add command line history for the user's convenience */
 		add_history(history);
 
 		gettimeofday(&before, NULL);
@@ -175,6 +132,7 @@ next:
 		free(input);
 	}
 
+	/* Call exit command on exit to clean up child processes */
 	return exit_cmd(NULL);
 }
 
@@ -202,7 +160,6 @@ CommandList *parse_commands(char *input) {
 		char *arg_str = strtok_r(cmd_str, delim, &save_space_ptr);
 
 		size_t args_buf_len = 3;
-		command->bin = arg_str;
 		command->num_args = 0;
 		command->args = calloc(args_buf_len, sizeof(*command->args));
 
@@ -251,34 +208,12 @@ CommandList *parse_commands(char *input) {
 	return commands;
 }
 
-const char *builtins[] = {
-	"exit",
-	"cd",
-	"checkEnv"
-};
-
-int (*builtins_funcs[]) (char **) = {
-	&exit_cmd,
-	&cd_cmd,
-	&checkEnv_cmd
-};
-
-#define NUM_BUILTINS ((int) (sizeof(builtins) / sizeof(*builtins)))
-#define PIPE_READ_SIDE (0)
-#define PIPE_WRITE_SIDE (1)
-#define TRY(syscall, str) \
-if (-1 == (syscall)) { \
-	perror(str); \
-	return EXIT_FAILURE; \
-}
-typedef int Pipe[2];
-
 int exec_cmd(Command *command) {
 	/* Check for command in builtins first.
 	 * If it does not exist there then assume it's an existing command. */
 	int i;
 	for (i = 0; i < NUM_BUILTINS; i++) {
-		if (0 == strcmp(command->bin, builtins[i])) {
+		if (0 == strcmp(command->args[0], builtins[i])) {
 			int ret_val = (*builtins_funcs[i])(command->args);
 			free(command->args);
 			free(command);
@@ -287,11 +222,7 @@ int exec_cmd(Command *command) {
 	}
 
 	/* Fork the process and execute the command on the child process */
-	pid = fork();
-	if (-1 == pid) { /* Error handling */
-		perror("fork");
-		return EXIT_FAILURE;
-	}
+	TRY(pid = fork(), "fork");
 
 	if (0 == pid) { /* Start execution as child */
 		return run_cmd(command);
@@ -304,14 +235,13 @@ int exec_cmd(Command *command) {
 }
 
 int run_cmd(Command *command) {
-	execvp(command->bin, command->args);
+	execvp(command->args[0], command->args);
 	/* If we end up here an error has occurred */
 	perror(SMSH);
 	free(command->args);
 	free(command);
 	return EXIT_FAILURE;
 }
-
 
 int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_in) {
 	Pipe pipefd;
@@ -322,9 +252,9 @@ int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_
 		if (0 == pid) {
 			TRY(dup2(fd_in, STDIN_FILENO), "dup2");
 			TRY(close(fd_in), "previous FD");
-			/* Hack for making pager work */
-			if (0 == strcmp(commands->cmds[cmd_index]->bin, "pager")) {
-				char *pager = getenv("PAGER");
+			/* Hard code support for the `pager` command in pipes */
+			if (0 == strcmp(commands->cmds[cmd_index]->args[0], "pager")) {
+				const char *pager = getenv("PAGER");
 				if (NULL != pager) {
 					execlp(pager, pager, (char *) NULL);
 					perror(SMSH);
@@ -333,7 +263,6 @@ int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_
 				perror(SMSH);
 				execlp("more", "more", (char *) NULL);
 				perror(SMSH);
-				free(pager);
 				return EXIT_FAILURE;
 			}
 			return run_cmd(commands->cmds[cmd_index]);
@@ -372,7 +301,7 @@ int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_
 	return exec_commands(commands, cmd_index + 1, pipefd[PIPE_READ_SIDE]);
 }
 
-/* Built in commands */
+/* The built-in exit command */
 int exit_cmd(char **args) {
 	(void) args; /* Workaround for unused variable */
 #if SIGDET
@@ -385,7 +314,7 @@ int exit_cmd(char **args) {
 
 	/* Ignore SIGTERM in parent and send it to all child processes */
 	signal(SIGTERM, SIG_IGN);
-	kill(0, SIGTERM);
+	TRY(kill(0, SIGTERM), "kill");
 
 #if !SIGDET
 	/* Poll and wait for child processes to finish */
@@ -395,7 +324,10 @@ int exit_cmd(char **args) {
 	exit(EXIT_SUCCESS);
 }
 
+/* The built-in cd command */
 int cd_cmd(char **args) {
+	/* Assume cd goes to $HOME by default.
+	 * If an argument is passed then cd to that location. */
 	const char *dir = getenv("HOME");
 	if (args[1]) {
 		dir = args[1];
@@ -406,14 +338,16 @@ int cd_cmd(char **args) {
 	return EXIT_SUCCESS;
 }
 
+/* Used for creating commands in checkEnv to be passed into
+ * exec_commands. */
 #define CREATE_COMMAND(cmd) \
 cmd = malloc(sizeof(*cmd)); \
 cmd->num_args = 1; \
-cmd->bin = cmd ## _ ## s; \
 cmd->args = malloc(sizeof(*cmd->args)); \
 cmd->args[0] = cmd ## _ ## s; \
 command_list->cmds[command_list->length++] = cmd;
 
+/* The built-in checkEnv command */
 int checkEnv_cmd(char **args) {
 	int ret_val;
 	CommandList *command_list;
@@ -431,6 +365,8 @@ int checkEnv_cmd(char **args) {
 
 	CREATE_COMMAND(printenv);
 
+	/* If an argument is passed to checkEnv, pipe printenv into
+	 * grep with the supplied arguments. */
 	if (args[1]) {
 		char *grep_s = "grep";
 		args[0] = grep_s;
@@ -438,7 +374,6 @@ int checkEnv_cmd(char **args) {
 		while (args[grep->num_args - 1]) {
 			grep->num_args++;
 		}
-		grep->bin = grep_s;
 		grep->args = args;
 		command_list->cmds[command_list->length++] = grep;
 	}
