@@ -103,6 +103,11 @@ int main(void) {
 		strcpy(history, input);
 		free(input);
 
+		if (history[0]) {
+			/* Add command line history for the user's convenience */
+			add_history(history);
+		}
+
 		/* 2. Parse arguments into commands. */
 		commands = parse_commands(history);
 
@@ -114,9 +119,6 @@ int main(void) {
 			/* For some reason an empty command was received. */
 			goto next;
 		}
-
-		/* Add command line history for the user's convenience */
-		add_history(history);
 
 		fg_process = !commands->bg;
 
@@ -262,9 +264,7 @@ int run_cmd(Command *command) {
 	execvp(command->args[0], command->args);
 	/* If we end up here an error has occurred */
 	perror(SMSH);
-	free(command->args);
-	free(command);
-	return EXIT_FAILURE;
+	exit(EXIT_FAILURE);
 }
 
 int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_in) {
@@ -287,7 +287,7 @@ int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_
 				perror(SMSH);
 				execlp("more", "more", (char *) NULL);
 				perror(SMSH);
-				return EXIT_FAILURE;
+				exit(EXIT_FAILURE);
 			}
 			return run_cmd(commands->cmds[cmd_index]);
 		}
