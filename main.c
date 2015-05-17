@@ -3,27 +3,28 @@
 /*
  * 1. Read input.
  * 2. Split into arguments and create CommandList struct.
- * 3. Execute each command and pipe if more than one in the background if bg or foreground otherwise.
+ * 3. Execute each command and pipe if more than one,
+ * in the background if '&' was found or foreground otherwise.
  *
  * Make sure child processes are killed when parent is by registering signal handlers.
  */
 static sigjmp_buf prompt_mark;
-static volatile sig_atomic_t bg_killed = 0;
+static volatile sig_atomic_t bg_killed = false, fg_killed = false;
 static pid_t pid = 0;
+static bool fg_process = false;
 
 void signal_handler(int sig) {
 	switch (sig) {
 		case SIGINT:
-			/* Only kill if child */
-			if (0 != pid && -1 == kill(pid, SIGKILL)) {
-				/* Child couldn't be killed, but perror can't be used here
-				 * because it is not safe for use in a signal handler.
-				 * The error is purposefully ignored. */
-			}
-			if (-1 == write(STDOUT_FILENO, "\n", 1)) {
-				/* The newline couldn't be printed.
-				 * Like above, perror can't be used and because the newline
-				 * isn't vital this error is purposefully ignored. */
+			/* Only kill if child and fg process */
+			if (fg_process && -1 != pid) {
+				fg_killed = true;
+				if (-1 == kill(pid, SIGKILL)) {
+					/* Child couldn't be killed, but perror can't be used here
+					 * because it is not safe for use in a signal handler.
+					 * The error is purposefully ignored. */
+					fg_killed = false;
+				}
 			}
 			break;
 		case SIGCHLD:
@@ -31,9 +32,18 @@ void signal_handler(int sig) {
 			/* Previously, the terminated background processes were
 			 * printed here. However, because printf is not safe for use in a signal
 			 * handler, it was updated to use a flag instead. */
+			if (fg_process || fg_killed) {
+				fg_killed = false;
+				return;
+			}
 			bg_killed = 1;
 			break;
 		default: return;
+	}
+	if (-1 == write(STDOUT_FILENO, "\n", 1)) {
+		/* The newline couldn't be printed.
+		 * Like above, perror can't be used and because the newline
+		 * isn't vital this error is purposefully ignored. */
 	}
 	/* Jump back to prompt */
 	siglongjmp(prompt_mark, 1);
@@ -65,17 +75,16 @@ int main(void) {
 		struct timeval before, after;
 		/* Check bg processes if pid is 0,
 		 * i.e. pid is not a foreground process */
-		bool check_bg = (0 == pid), fg_process = false;
+		bool check_bg = !fg_killed;
 
 		sighold(SIGINT);
 		/* Assume the length of CWD is never greater than 80 characters */
 		path = getcwd(NULL, 80);
 
 #if SIGDET
-		check_bg = check_bg && !!bg_killed;
+		check_bg = check_bg && bg_killed;
 		bg_killed = 0;
 #endif
-
 		if (check_bg) {
 			/* Check for completed child processes */
 			pid_t zombie;
@@ -143,19 +152,18 @@ next:
 
 			sighold(SIGCHLD);
 
-			/* Wait for foreground process(es) */
-			while (-1 != waitpid(-1, NULL, 0) || ECHILD != errno);
+			/* Wait for foreground process */
+			while (-1 != waitpid(pid, NULL, 0));
 			gettimeofday(&after, NULL);
 
-			time_taken = 1000 * (after.tv_sec - before.tv_sec) +
-				(after.tv_usec - before.tv_usec) / 1000;
-			printf("%" PRIu64 " ms\n", time_taken);
-
 			sigrelse(SIGCHLD);
-		}
 
-		/* Clear pid (only used by foreground processes) */
-		pid = 0;
+			time_taken = (uint64_t) (1000 * (after.tv_sec - before.tv_sec) +
+					(after.tv_usec - before.tv_usec) / 1000);
+			printf("%" PRIu64 " ms\n", time_taken);
+			fflush(stdout);
+			fg_process = false;
+		}
 	}
 
 	/* Call exit command on exit to clean up child processes */
