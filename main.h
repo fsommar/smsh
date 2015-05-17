@@ -46,6 +46,7 @@ typedef struct {
 	bool bg;
 } CommandList;
 
+void signal_handler(int);
 CommandList *parse_commands(char *);
 int exec_cmd(Command *);
 int exec_commands(CommandList *, const uint32_t, const int);
@@ -55,14 +56,14 @@ int cd_cmd(char **);
 int checkEnv_cmd(char **);
 
 /* Names of the supported built-in functions */
-const char *builtins[] = {
+static const char *builtins[] = {
 	"exit",
 	"cd",
 	"checkEnv"
 };
 
 /* Pointers to the built-in functions that the shell supports */
-int (*builtins_funcs[]) (char **) = {
+static int (*builtins_funcs[]) (char **) = {
 	&exit_cmd,
 	&cd_cmd,
 	&checkEnv_cmd
