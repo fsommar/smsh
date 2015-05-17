@@ -408,12 +408,17 @@ int checkEnv_cmd(char **args) {
 	/* If an argument is passed to checkEnv, pipe printenv into
 	 * grep with the supplied arguments. */
 	if (args[1]) {
-		args[0] = (char *) grep_s;
+		uint32_t i;
 		grep = malloc(sizeof(*grep));
-		while (args[grep->num_args - 1]) {
+		grep->num_args = 0;
+		while (args[grep->num_args]) {
 			grep->num_args++;
 		}
-		grep->args = args;
+		grep->args = calloc(grep->num_args + 1, sizeof(*grep->args));
+		grep->args[0] = (char *) grep_s;
+		for (i = 1; i < grep->num_args; i++) {
+			grep->args[i] = args[i];
+		}
 		command_list->cmds[command_list->length++] = grep;
 	}
 
