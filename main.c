@@ -192,6 +192,13 @@ CommandList *parse_commands(char *input) {
 		/* Adds all the tokens to the command arguments, including the command itself */
 		while (NULL != arg_str) {
 			if (commands->bg) {
+				uint32_t i;
+				for (i = 0; i < commands->length; i++) {
+					free(commands->cmds[i]->args);
+					free(commands->cmds[i]);
+				}
+				free(commands->cmds);
+				free(commands);
 				/* If '&' already was seen then it's not the last symbol */
 				fprintf(stderr, "smsh: inaccurate use of background character '&' (%s)", arg_str);
 				return NULL;
