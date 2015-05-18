@@ -279,29 +279,45 @@ int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_
 	Pipe pipefd;
 
 	if (cmd_index == commands->length - 1) {
+		/* The last command in the pipeline is special cased as it
+		 * shouldn't call itself recursively and additionally not
+		 * redirect STDOUT. */
 		uint32_t i;
 		TRY(pid = fork(), "fork");
 		if (0 == pid) {
+			/* Redirect the previous command's pipe to this
+			 * command's STDIN. */
 			TRY(dup2(fd_in, STDIN_FILENO), "dup2");
 			TRY(close(fd_in), "previous FD");
 			/* Hard code support for the `pager` command in pipes */
 			if (0 == strcmp(commands->cmds[cmd_index]->args[0], "pager")) {
 				const char *pager = getenv("PAGER");
+				/* If the PAGER environment variable contains something,
+				 * that command is tried first. */
 				if (pager) {
-					execlp(pager, pager, (char *) NULL);
+					if (-1 == execlp(pager, pager, (char *) NULL)) {
+						perror(SMSH);
+					}
+				}
+				/* If that fails, less is tried */
+				if (-1 == execlp("less", "less", (char *) NULL)) {
 					perror(SMSH);
 				}
-				execlp("less", "less", (char *) NULL);
-				perror(SMSH);
-				execlp("more", "more", (char *) NULL);
-				perror(SMSH);
+				/* Finally, more is tried */
+				if (-1 == execlp("more", "more", (char *) NULL)) {
+					perror(SMSH);
+				}
+				/* If everything fails then exit the child with EXIT_FAILURE */
 				exit(EXIT_FAILURE);
 			}
 			return run_cmd(commands->cmds[cmd_index]);
 		}
 
-		TRY(close(fd_in), "previous FD")
+		/* Close the file descriptor from the
+		 * previous command's pipe. */
+		TRY(close(fd_in), "previous FD");
 
+		/* Free the commands as they are no longer needed */
 		for (i = 0; i < commands->length; i++) {
 			free(commands->cmds[i]->args);
 			free(commands->cmds[i]);
@@ -309,15 +325,21 @@ int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_
 		return EXIT_SUCCESS;
 	}
 
+	/* The following code is for the general recursion,
+	 * i.e. first to second to last commands. */
+
 	TRY(pipe(pipefd), "pipe");
 	TRY(pid = fork(), "fork");
 
 	if (0 == pid) {
+		/* fd_in is STDIN for the very first command */
 		if (fd_in != STDIN_FILENO) {
+			/* Redirect input pipes */
 			TRY(dup2(fd_in, STDIN_FILENO), "dup2");
 			TRY(close(fd_in), "previous FD");
 		}
 
+		/* Redirect the output pipes */
 		TRY(dup2(pipefd[PIPE_WRITE_SIDE], STDOUT_FILENO), "dup2");
 		TRY(close(pipefd[PIPE_WRITE_SIDE]), "pipe write");
 		TRY(close(pipefd[PIPE_READ_SIDE]), "pipe read");
@@ -325,6 +347,7 @@ int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_
 		return run_cmd(commands->cmds[cmd_index]);
 	}
 
+	/* Close the pipes and recurse */
 	TRY(close(pipefd[PIPE_WRITE_SIDE]), "pipe write");
 	if (fd_in != STDIN_FILENO) {
 		TRY(close(fd_in), "previous FD");
