@@ -379,18 +379,46 @@ int exit_cmd(char **args) {
 	exit(EXIT_SUCCESS);
 }
 
-/* The built-in cd command */
-int cd_cmd(char **args) {
-	/* Assume cd goes to $HOME by default.
-	 * If an argument is passed then cd to that location. */
-	const char *dir = getenv("HOME");
-	if (args[1]) {
-		dir = args[1];
-	}
+static int cd(const char *dir) {
 	if (0 != chdir(dir)) {
 		perror("cd");
 	}
 	return EXIT_SUCCESS;
+}
+
+/* The built-in cd command */
+int cd_cmd(char **args) {
+	/* For simplicity's sake, the directory is expected
+	 * to never be larger than 1024 characters.
+	 *
+	 * Additionally, $HOME is assumed to always be set
+	 * for the same reason. If it's undefined there's
+	 * nothing to do anyway. */
+	char dir[1024], *tmp;
+	memset(dir, 0, sizeof(dir));
+
+	if (!args[1]) {
+		/* 0 arguments given. */
+		return cd(getenv("HOME"));
+	}
+
+	if (args[2]) {
+		/* 2 (or more) arguments given. */
+		fprintf(stderr, "cd: only one argument is supported.");
+		return EXIT_FAILURE;
+	}
+
+	/* One argument was given; the directory.
+	 * First, perform substitution on ~, should it exist. */
+	tmp = args[1];
+	if (tmp[0] == '~') {
+		strcpy(dir, getenv("HOME"));
+		strcat(dir, &tmp[1]);
+	} else {
+		strcat(dir, tmp);
+	}
+
+	return cd(dir);
 }
 
 /* Used for creating commands in checkEnv to be passed into
