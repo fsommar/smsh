@@ -31,14 +31,16 @@ int main(void) {
 
 	/* Loop forever (until EOF), reading user input */
 	for (;;) {
-		char prompt[90], history[1024], *input, *path;
+		/* Assume the length of the prompt
+		 * will never exceed 1024 characters. */
+		char prompt[1024], input[1024], *tmp;
 		struct timeval before, after;
 		CommandList *commands;
 		pid_t zombie;
 
-		sighold(SIGINT);
-		/* Assume the length of CWD is never greater than 80 characters */
-		path = getcwd(NULL, 80);
+		/* Clear the buffers on the stack. */
+		memset(prompt, 0, sizeof(prompt));
+		memset(input, 0, sizeof(input));
 
 		/* Check for completed child processes */
 		while (0 < (zombie = waitpid(0, NULL, WNOHANG))) {
@@ -46,31 +48,35 @@ int main(void) {
 		}
 		fflush(stdout);
 
-		strcpy(prompt, path);
-		free(path);
+		if (NULL == getcwd(prompt, 1024)) {
+			/* Ignore the error and continue;
+			 * if the path is greater than 1024 characters
+			 * then it probably doesn't fare well from being
+			 * used as a prompt anyway. */
+		}
+		substitute_home(prompt);
 		strcat(prompt, " ¥ ");
-		sigrelse(SIGINT);
 
-		/* input is allocated in readline.
-		 * it's the callee's (our) obligation to free it */
-		input = readline(prompt);
+		/* tmp is allocated in readline and it's the callee's (our)
+		 * obligation to free it. */
+		tmp = readline(prompt);
 		/* On e.g. Ctrl-D the input is null and the shell is exited */
-		if (!input) break;
+		if (!tmp) break;
 
 		/* ENTERING CRITICAL AREA */
 		sighold(SIGINT);
 
 		/* parse_commands modifies input - copy and save for adding to history */
-		strcpy(history, input);
-		free(input);
+		strcpy(input, tmp);
+		free(tmp);
 
-		if (history[0]) {
+		if (input[0]) {
 			/* Add command line history for the user's convenience */
-			add_history(history);
+			add_history(input);
 		}
 
 		/* 2. Parse arguments into commands. */
-		commands = parse_commands(history);
+		commands = parse_commands(input);
 
 		if (!commands) {
 			sigrelse(SIGINT);
@@ -442,6 +448,29 @@ int checkEnv_cmd(char **args) {
 	free(command_list->cmds);
 	free(command_list);
 	return ret_val;
+}
+
+/* Helper function when creating the prompt */
+void substitute_home(char *dst) {
+	char *tmp = getenv("HOME");
+	size_t i, len = strlen(tmp);
+
+	/* Check if first part of dst equals $HOME. */
+	for (i = 0; i < len; i++) {
+		if (!tmp[i] || !dst[i] || tmp[i] != dst[i]) {
+			return;
+		}
+	}
+
+	/* Remove traces of $HOME path
+	 * and replace with ~. */
+	dst[0] = '~';
+	/* Move everything after $HOME to after ~,
+	 * and clear its memory. */
+	for (i = 1; i < len || dst[len + i - 1]; i++) {
+		dst[i] = dst[len + i - 1];
+		dst[len + i - 1] = 0;
+	}
 }
 
 /* The function handling the two signals that

@@ -54,6 +54,7 @@ int run_cmd(Command *);
 int exit_cmd(char **);
 int cd_cmd(char **);
 int checkEnv_cmd(char **);
+void substitute_home(char *);
 
 /* Names of the supported built-in functions */
 static const char *builtins[] = {
