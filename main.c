@@ -389,7 +389,10 @@ static int cd(const char *dir) {
 	if (0 != chdir(dir)) {
 		perror("cd");
 	}
-	return EXIT_SUCCESS;
+	/* This is a workaround to prevent
+	 * the running time for the cd command
+	 * to print on completion. */
+	return EXIT_FAILURE;
 }
 
 /* The built-in cd command */
@@ -410,7 +413,7 @@ int cd_cmd(char **args) {
 
 	if (args[2]) {
 		/* 2 (or more) arguments given. */
-		fprintf(stderr, "cd: only one argument is supported.");
+		fprintf(stderr, "cd: only one argument is supported.\n");
 		return EXIT_FAILURE;
 	}
 
@@ -419,6 +422,7 @@ int cd_cmd(char **args) {
 	tmp = args[1];
 	if (tmp[0] == '~') {
 		strcpy(dir, getenv("HOME"));
+		/* Copy everything after ~ to the dir. */
 		strcat(dir, &tmp[1]);
 	} else {
 		strcat(dir, tmp);
