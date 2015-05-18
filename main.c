@@ -1,5 +1,9 @@
 #include "main.h"
 
+static sigjmp_buf prompt_mark;
+static pid_t pid = -1;
+static bool fg_process = false;
+
 /*
  * 1. Read input.
  * 2. Split into arguments and create CommandList struct.
@@ -8,51 +12,6 @@
  *
  * Make sure child processes are killed when parent is by registering signal handlers.
  */
-static sigjmp_buf prompt_mark;
-static pid_t pid = -1;
-static bool fg_process = false;
-
-void signal_handler(int sig) {
-	switch (sig) {
-		case SIGINT:
-			/* Only kill if child and fg process */
-			if (fg_process && -1 != pid) {
-				if (-1 == kill(pid, SIGTERM)) {
-					/* Child couldn't be killed, but perror can't be used here
-					 * because it is not safe for use in a signal handler.
-					 * The error is purposefully ignored. */
-					return;
-				}
-				if (-1 == waitpid(pid, NULL, 0)) {
-					/* This probably means that the child for some reason
-					 * already has been waited for.
-					 * There's nothing that can be done and therefore
-					 * the error is ignored. */
-				}
-			}
-			break;
-		case SIGCHLD:
-			/* This will only run when SIGDET=1. */
-			/* Previously, the terminated background processes were
-			 * printed here. However, because printf is not safe for use in a signal
-			 * handler, it was updated to jump to the prompt instead. */
-			if (fg_process) {
-				return;
-			}
-			break;
-		default: return;
-	}
-	/* Print a newline before the new prompt so that it doesn't
-	 * show on the same line as the previous prompt that was jumped from */
-	if (-1 == write(STDOUT_FILENO, "\n", 1)) {
-		/* The newline couldn't be printed.
-		 * Like above, perror can't be used and because the newline
-		 * isn't vital this error is purposefully ignored. */
-	}
-	/* Jump back to prompt */
-	siglongjmp(prompt_mark, 1);
-}
-
 int main(void) {
 	/* Register signal handler */
 	struct sigaction sa;
@@ -483,4 +442,47 @@ int checkEnv_cmd(char **args) {
 	free(command_list->cmds);
 	free(command_list);
 	return ret_val;
+}
+
+/* The function handling the two signals that
+ * are caught by the program: SIGINT and SIGCHLD. */
+void signal_handler(int sig) {
+	switch (sig) {
+		case SIGINT:
+			/* Only kill if child and fg process */
+			if (fg_process && -1 != pid) {
+				if (-1 == kill(pid, SIGTERM)) {
+					/* Child couldn't be killed, but perror can't be used here
+					 * because it is not safe for use in a signal handler.
+					 * The error is purposefully ignored. */
+					return;
+				}
+				if (-1 == waitpid(pid, NULL, 0)) {
+					/* This probably means that the child for some reason
+					 * already has been waited for.
+					 * There's nothing that can be done and therefore
+					 * the error is ignored. */
+				}
+			}
+			break;
+		case SIGCHLD:
+			/* This will only run when SIGDET=1. */
+			/* Previously, the terminated background processes were
+			 * printed here. However, because printf is not safe for use in a signal
+			 * handler, it was updated to jump to the prompt instead. */
+			if (fg_process) {
+				return;
+			}
+			break;
+		default: return;
+	}
+	/* Print a newline before the new prompt so that it doesn't
+	 * show on the same line as the previous prompt that was jumped from */
+	if (-1 == write(STDOUT_FILENO, "\n", 1)) {
+		/* The newline couldn't be printed.
+		 * Like above, perror can't be used and because the newline
+		 * isn't vital this error is purposefully ignored. */
+	}
+	/* Jump back to prompt */
+	siglongjmp(prompt_mark, 1);
 }
