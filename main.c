@@ -9,8 +9,7 @@
  * Make sure child processes are killed when parent is by registering signal handlers.
  */
 static sigjmp_buf prompt_mark;
-static volatile sig_atomic_t bg_killed = false, fg_killed = false;
-static pid_t pid = 0;
+static pid_t pid = -1;
 static bool fg_process = false;
 
 void signal_handler(int sig) {
@@ -18,12 +17,17 @@ void signal_handler(int sig) {
 		case SIGINT:
 			/* Only kill if child and fg process */
 			if (fg_process && -1 != pid) {
-				fg_killed = true;
-				if (-1 == kill(pid, SIGKILL)) {
+				if (-1 == kill(pid, SIGTERM)) {
 					/* Child couldn't be killed, but perror can't be used here
 					 * because it is not safe for use in a signal handler.
 					 * The error is purposefully ignored. */
-					fg_killed = false;
+					return;
+				}
+				if (-1 == waitpid(pid, NULL, 0)) {
+					/* This probably means that the child for some reason
+					 * already has been waited for.
+					 * There's nothing that can be done and therefore
+					 * the error is ignored. */
 				}
 			}
 			break;
@@ -31,15 +35,15 @@ void signal_handler(int sig) {
 			/* This will only run when SIGDET=1. */
 			/* Previously, the terminated background processes were
 			 * printed here. However, because printf is not safe for use in a signal
-			 * handler, it was updated to use a flag instead. */
-			if (fg_process || fg_killed) {
-				fg_killed = false;
+			 * handler, it was updated to jump to the prompt instead. */
+			if (fg_process) {
 				return;
 			}
-			bg_killed = 1;
 			break;
 		default: return;
 	}
+	/* Print a newline before the new prompt so that it doesn't
+	 * show on the same line as the previous prompt that was jumped from */
 	if (-1 == write(STDOUT_FILENO, "\n", 1)) {
 		/* The newline couldn't be printed.
 		 * Like above, perror can't be used and because the newline
@@ -66,33 +70,22 @@ int main(void) {
 	/* Set prompt mark here for jumping to from the signal handler */
 	while (0 != sigsetjmp(prompt_mark, 1));
 
-	/* Loop forever, reading user input */
+	/* Loop forever (until EOF), reading user input */
 	for (;;) {
-		char prompt[90];
-		char *input, *path;
-		char history[1024];
-		CommandList *commands;
+		char prompt[90], history[1024], *input, *path;
 		struct timeval before, after;
-		/* Check bg processes if pid is 0,
-		 * i.e. pid is not a foreground process */
-		bool check_bg = !fg_killed;
+		CommandList *commands;
+		pid_t zombie;
 
 		sighold(SIGINT);
 		/* Assume the length of CWD is never greater than 80 characters */
 		path = getcwd(NULL, 80);
 
-#if SIGDET
-		check_bg = check_bg && bg_killed;
-		bg_killed = 0;
-#endif
-		if (check_bg) {
-			/* Check for completed child processes */
-			pid_t zombie;
-			while (0 < (zombie = waitpid(0, NULL, WNOHANG))) {
-				printf("%d done\n", (int) zombie);
-			}
-			fflush(stdout);
+		/* Check for completed child processes */
+		while (0 < (zombie = waitpid(0, NULL, WNOHANG))) {
+			printf("%d done\n", (int) zombie);
 		}
+		fflush(stdout);
 
 		strcpy(prompt, path);
 		free(path);
@@ -357,7 +350,7 @@ int exit_cmd(char **args) {
 
 #if !SIGDET
 	/* Poll and wait for child processes to finish */
-	while (-1 != waitpid(-1, NULL, 0));
+	while (-1 != waitpid(0, NULL, 0));
 #endif
 
 	exit(EXIT_SUCCESS);
