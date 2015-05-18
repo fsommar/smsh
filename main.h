@@ -30,6 +30,11 @@ if (-1 == (syscall)) { \
 	perror(str); \
 	return EXIT_FAILURE; \
 }
+#define TRY_OR_EXIT(syscall, str) \
+if (-1 == (syscall)) { \
+	perror(str); \
+	exit_cmd(NULL); \
+}
 /* Make it obvious by type what's used as a pipe */
 typedef int Pipe[2];
 

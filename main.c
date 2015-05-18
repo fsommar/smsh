@@ -21,10 +21,10 @@ int main(void) {
 
 #if SIGDET
 	/* This is for cleanup of background processes */
-	TRY(sigaction(SIGCHLD, &sa, NULL), "sigaction");
+	TRY_OR_EXIT(sigaction(SIGCHLD, &sa, NULL), "sigaction");
 #endif
 	/* Intercept SIGINT for parent and pass it to child */
-	TRY(sigaction(SIGINT, &sa, NULL), "sigaction");
+	TRY_OR_EXIT(sigaction(SIGINT, &sa, NULL), "sigaction");
 
 	/* Set prompt mark here for jumping to from the signal handler */
 	while (0 != sigsetjmp(prompt_mark, 1));
@@ -64,7 +64,7 @@ int main(void) {
 		if (!tmp) break;
 
 		/* ENTERING CRITICAL AREA */
-		sighold(SIGINT);
+		TRY_OR_EXIT(sighold(SIGINT), "sighold");
 
 		/* parse_commands modifies input - copy and save for adding to history */
 		strcpy(input, tmp);
@@ -79,7 +79,7 @@ int main(void) {
 		commands = parse_commands(input);
 
 		if (!commands) {
-			sigrelse(SIGINT);
+			TRY_OR_EXIT(sigrelse(SIGINT), "sigrelse");
 			continue;
 		}
 		if (0 == commands->length) {
@@ -96,31 +96,61 @@ int main(void) {
 				fg_process = false;
 			}
 		} else {
-			/* Commands were piped, handle it accordingly */
-			exec_commands(commands, 0, STDIN_FILENO);
+			int ret;
+			/* Commands were piped, handle it accordingly.
+			 *
+			 * To prevent the signal handler from registering
+			 * when commands in the pipeline finishes, the SIGCHLD
+			 * signal is masked during execution.
+			 *
+			 * The process is forked to allow for commands like
+			 * `sleep 10 | ls | sort` to both be run in the foreground
+			 * and suspend prompt until finished, and be run in the
+			 * background and immediately return the prompt to the
+			 * user.
+			 *
+			 * This belongs in its own function, but will have to
+			 * reside here while everything stabilizes.
+			 * */
+			TRY_OR_EXIT(sighold(SIGCHLD), "sighold");
+			switch (pid = fork()) {
+				case -1:
+					/* Skip the execution of a command and
+					 * try again at the next prompt. */
+					perror("fork");
+					fg_process = false;
+					break;
+				case 0:
+					ret = exec_commands(commands, 0, STDIN_FILENO);
+					if (-1 == wait(NULL)) {
+						exit(EXIT_FAILURE);
+					}
+					exit(ret);
+			}
+			TRY_OR_EXIT(sigrelse(SIGCHLD), "sigrelse");
 		}
 
 next:
 		free(commands->cmds);
 		free(commands);
-		sigrelse(SIGINT);
+		TRY_OR_EXIT(sigrelse(SIGINT), "sigrelse");
 
 		if (fg_process) {
 			int status;
 			uint64_t time_taken;
 
-			sighold(SIGCHLD);
+			TRY_OR_EXIT(sighold(SIGCHLD), "sighold");
 
 			/* Wait for foreground process */
 			while (-1 != waitpid(pid, &status, 0));
 			if (!WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS) {
-				/* Any error occurred during the execution.
+				/* An error occurred during the execution.
 				 * Do not print the time it took to run the command. */
 				continue;
 			}
 			gettimeofday(&after, NULL);
 
-			sigrelse(SIGCHLD);
+			TRY_OR_EXIT(sigrelse(SIGCHLD), "sigrelse");
 
 			time_taken = (uint64_t) (1000 * (after.tv_sec - before.tv_sec) +
 					(after.tv_usec - before.tv_usec) / 1000);
@@ -248,6 +278,8 @@ int run_cmd(Command *command) {
 
 int exec_commands(CommandList *commands, const size_t cmd_index, const int fd_in) {
 	Pipe pipefd;
+	int ret, status;
+	pid_t this_pid;
 
 	if (cmd_index == commands->length - 1) {
 		/* The last command in the pipeline is special cased as it
@@ -324,7 +356,14 @@ int exec_commands(CommandList *commands, const size_t cmd_index, const int fd_in
 		TRY(close(fd_in), "previous FD");
 	}
 
-	return exec_commands(commands, cmd_index + 1, pipefd[PIPE_READ_SIDE]);
+	this_pid = pid;
+	ret = exec_commands(commands, cmd_index + 1, pipefd[PIPE_READ_SIDE]);
+	if (-1 != waitpid(this_pid, &status, 0) &&
+			(!WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS)) {
+		/* The process was exited with an error (or not at all). */
+		return EXIT_FAILURE;
+	}
+	return ret;
 }
 
 /* The built-in exit command */
@@ -335,12 +374,21 @@ int exit_cmd(char **args) {
 	 * child processes of the calling processes shall
 	 * not be transformed into zombie processes when they terminate."
 	 */
-	signal(SIGCHLD, SIG_IGN);
+	if (SIG_ERR == signal(SIGCHLD, SIG_IGN)) {
+		perror("signal");
+		exit(EXIT_FAILURE);
+	}
 #endif
 
 	/* Ignore SIGTERM in parent and send it to all child processes */
-	signal(SIGTERM, SIG_IGN);
-	TRY(kill(0, SIGTERM), "kill");
+	if (SIG_ERR == signal(SIGTERM, SIG_IGN)) {
+		perror("signal");
+		exit(EXIT_FAILURE);
+	}
+	if (-1 == kill(0, SIGTERM)) {
+		perror("kill");
+		exit(EXIT_FAILURE);
+	}
 
 #if !SIGDET
 	/* Poll and wait for child processes to finish */
@@ -444,9 +492,11 @@ int checkEnv_cmd(char **args) {
 	CREATE_COMMAND(sort);
 	CREATE_COMMAND(pager);
 
+	TRY_OR_EXIT(sighold(SIGCHLD), "sighold");
 	ret = exec_commands(command_list, 0, STDIN_FILENO);
 	free(command_list->cmds);
 	free(command_list);
+	TRY(sigrelse(SIGCHLD), "sigrelse");
 	return ret;
 }
 
