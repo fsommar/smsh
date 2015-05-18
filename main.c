@@ -141,12 +141,18 @@ next:
 		sigrelse(SIGINT);
 
 		if (fg_process) {
+			int status;
 			uint64_t time_taken;
 
 			sighold(SIGCHLD);
 
 			/* Wait for foreground process */
-			while (-1 != waitpid(pid, NULL, 0));
+			while (-1 != waitpid(pid, &status, 0));
+			if (!WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS) {
+				/* Any error occurred during the execution.
+				 * Do not print the time it took to run the command. */
+				continue;
+			}
 			gettimeofday(&after, NULL);
 
 			sigrelse(SIGCHLD);
