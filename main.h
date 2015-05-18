@@ -35,26 +35,26 @@ typedef int Pipe[2];
 
 /* e.g. "ls -aHpl" */
 typedef struct {
-	uint32_t num_args; /* 2 */
+	size_t num_args; /* 2 */
 	char **args; /* ["ls", "-aHpl", NULL] */
 } Command;
 
 /* Used for Command(s) and if it should run in fg or bg */
 typedef struct {
-	uint32_t length;
+	size_t length;
 	Command **cmds;
 	bool bg;
 } CommandList;
 
-void signal_handler(int);
 CommandList *parse_commands(char *);
 int exec_cmd(Command *);
-int exec_commands(CommandList *, const uint32_t, const int);
+int exec_commands(CommandList *, const size_t, const int);
 int run_cmd(Command *);
 int exit_cmd(char **);
 int cd_cmd(char **);
 int checkEnv_cmd(char **);
 void substitute_home(char *);
+void signal_handler(int);
 
 /* Names of the supported built-in functions */
 static const char *builtins[] = {

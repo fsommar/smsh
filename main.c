@@ -164,7 +164,7 @@ CommandList *parse_commands(char *input) {
 		/* Adds all the tokens to the command arguments, including the command itself */
 		while (NULL != arg_str) {
 			if (commands->bg) {
-				uint32_t i;
+				size_t i;
 				for (i = 0; i < commands->length; i++) {
 					free(commands->cmds[i]->args);
 					free(commands->cmds[i]);
@@ -219,10 +219,10 @@ int exec_cmd(Command *command) {
 	int i;
 	for (i = 0; i < NUM_BUILTINS; i++) {
 		if (0 == strcmp(command->args[0], builtins[i])) {
-			int ret_val = (*builtins_funcs[i])(command->args);
+			int ret = (*builtins_funcs[i])(command->args);
 			free(command->args);
 			free(command);
-			return ret_val;
+			return ret;
 		}
 	}
 
@@ -246,14 +246,14 @@ int run_cmd(Command *command) {
 	exit(EXIT_FAILURE);
 }
 
-int exec_commands(CommandList *commands, const uint32_t cmd_index, const int fd_in) {
+int exec_commands(CommandList *commands, const size_t cmd_index, const int fd_in) {
 	Pipe pipefd;
 
 	if (cmd_index == commands->length - 1) {
 		/* The last command in the pipeline is special cased as it
 		 * shouldn't call itself recursively and additionally not
 		 * redirect STDOUT. */
-		uint32_t i;
+		size_t i;
 		TRY(pid = fork(), "fork");
 		if (0 == pid) {
 			/* Redirect the previous command's pipe to this
@@ -412,7 +412,7 @@ static const char *grep_s = "grep";
 
 /* The built-in checkEnv command */
 int checkEnv_cmd(char **args) {
-	int ret_val;
+	int ret;
 	CommandList *command_list;
 	Command *printenv, *grep, *sort, *pager;
 
@@ -427,7 +427,7 @@ int checkEnv_cmd(char **args) {
 	/* If an argument is passed to checkEnv, pipe printenv into
 	 * grep with the supplied arguments. */
 	if (args[1]) {
-		uint32_t i;
+		size_t i;
 		grep = malloc(sizeof(*grep));
 		grep->num_args = 0;
 		while (args[grep->num_args]) {
@@ -444,10 +444,10 @@ int checkEnv_cmd(char **args) {
 	CREATE_COMMAND(sort);
 	CREATE_COMMAND(pager);
 
-	ret_val = exec_commands(command_list, 0, STDIN_FILENO);
+	ret = exec_commands(command_list, 0, STDIN_FILENO);
 	free(command_list->cmds);
 	free(command_list);
-	return ret_val;
+	return ret;
 }
 
 /* Helper function when creating the prompt */
