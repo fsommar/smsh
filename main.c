@@ -452,7 +452,7 @@ cmd = malloc(sizeof(*cmd)); \
 cmd->num_args = 1; \
 cmd->args = calloc(2, sizeof(*cmd->args)); \
 cmd->args[0] = (char *) cmd ## _ ## s; \
-command_list->cmds[command_list->length++] = cmd;
+commands.cmds[commands.length++] = cmd;
 
 static const char *printenv_s = "printenv";
 static const char *sort_s = "sort";
@@ -461,14 +461,12 @@ static const char *grep_s = "grep";
 
 /* The built-in checkEnv command */
 int checkEnv_cmd(char **args) {
-	CommandList *command_list;
+	CommandList commands;
 	Command *printenv, *grep, *sort, *pager;
 
-	command_list = malloc(sizeof(*command_list));
-	command_list->bg = false;
-	command_list->length = 0;
-
-	command_list->cmds = calloc(args[1] ? 4 : 3, sizeof(*command_list->cmds));
+	commands.bg = false;
+	commands.length = 0;
+	commands.cmds = calloc(args[1] ? 4 : 3, sizeof(*commands.cmds));
 
 	CREATE_COMMAND(printenv);
 
@@ -486,14 +484,13 @@ int checkEnv_cmd(char **args) {
 		for (i = 1; i < grep->num_args; i++) {
 			grep->args[i] = args[i];
 		}
-		command_list->cmds[command_list->length++] = grep;
+		commands.cmds[commands.length++] = grep;
 	}
 
 	CREATE_COMMAND(sort);
 	CREATE_COMMAND(pager);
 
-	exec(command_list);
-	free(command_list);
+	exec(&commands);
 	return EXIT_SUCCESS;
 }
 
