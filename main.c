@@ -170,12 +170,15 @@ void parse_commands(CommandList *commands, char *input) {
 	char *save_pipe_ptr, *save_space_ptr;
 	char *cmd_str = strtok_r(input, pipe_delim, &save_pipe_ptr);
 
+	Command *command;
+
 	size_t cmds_buf_len = 2;
 	commands->cmds = calloc(cmds_buf_len, sizeof(*commands->cmds));
 
 	while (NULL != cmd_str) {
 		/* Split the command into tokens by using space as a deliminator */
 		char *arg_str = strtok_r(cmd_str, delim, &save_space_ptr);
+		size_t args_buf_len = 3;
 
 		/* If a previous command indicated bg it indicates a parse error.
 		 * Only the last command can have & as an indicator. */
@@ -193,9 +196,7 @@ void parse_commands(CommandList *commands, char *input) {
 		}
 
 		/* The callee should free this after processing the command */
-		Command *command = malloc(sizeof(*command));
-
-		size_t args_buf_len = 3;
+		command = malloc(sizeof(*command));
 		command->num_args = 0;
 		command->args = calloc(args_buf_len, sizeof(*command->args));
 
