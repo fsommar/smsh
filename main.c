@@ -35,12 +35,15 @@ int main(void) {
 		 * will never exceed 1024 characters. */
 		char prompt[1024], input[1024], *tmp;
 		struct timeval before, after;
-		CommandList *commands;
+		CommandList commands;
 		pid_t zombie;
 
 		/* Clear the buffers on the stack. */
 		memset(prompt, 0, sizeof(prompt));
 		memset(input, 0, sizeof(input));
+
+		commands.bg = false;
+		commands.length = 0;
 
 		/* Check for completed child processes */
 		while (0 < (zombie = waitpid(0, NULL, WNOHANG))) {
@@ -70,27 +73,23 @@ int main(void) {
 		strcpy(input, tmp);
 		free(tmp);
 
-		if (input[0]) {
+		if (input && *input) {
 			/* Add command line history for the user's convenience */
 			add_history(input);
 		}
 
 		/* 2. Parse arguments into commands. */
-		commands = parse_commands(input);
+		parse_commands(&commands, input);
 
-		if (!commands) {
-			TRY_OR_EXIT(sigrelse(SIGINT), "sigrelse");
-			continue;
-		}
-		if (0 == commands->length) {
+		if (0 == commands.length) {
 			/* For some reason an empty command was received. */
-			free(commands->cmds);
-			free(commands);
+			free(commands.cmds);
 			continue;
 		}
 
 		gettimeofday(&before, NULL);
-		exec(commands);
+		exec(&commands);
+		/* EXITING CRITICAL AREA */
 		TRY_OR_EXIT(sigrelse(SIGINT), "sigrelse");
 
 		if (fg_process) {
@@ -154,6 +153,7 @@ void exec(CommandList *commands) {
 				break;
 			case 0:
 				ret = exec_commands(commands, 0, STDIN_FILENO);
+				free(commands->cmds);
 				if (-1 == wait(NULL)) {
 					exit(EXIT_FAILURE);
 				}
@@ -163,21 +163,15 @@ void exec(CommandList *commands) {
 	}
 
 	free(commands->cmds);
-	free(commands);
 }
 
-CommandList *parse_commands(char *input) {
-	/* Free in main method after processing all the commands */
-	CommandList *commands = malloc(sizeof(*commands));
-
+void parse_commands(CommandList *commands, char *input) {
 	/* Split the inputs into commands by using the pipeline as a deliminator */
 	const char *pipe_delim = "|";
 	char *save_pipe_ptr;
 	char *cmd_str = strtok_r(input, pipe_delim, &save_pipe_ptr);
 
 	size_t cmds_buf_len = 2;
-	commands->bg = false;
-	commands->length = 0;
 	commands->cmds = calloc(cmds_buf_len, sizeof(*commands->cmds));
 
 	while (NULL != cmd_str) {
@@ -202,10 +196,9 @@ CommandList *parse_commands(char *input) {
 					free(commands->cmds[i]);
 				}
 				free(commands->cmds);
-				free(commands);
 				/* If '&' already was seen then it's not the last symbol */
 				fprintf(stderr, "smsh: inaccurate use of background character '&' (%s)", arg_str);
-				return NULL;
+				return;
 			}
 
 			if (0 == strcmp(arg_str, "&")) {
@@ -241,8 +234,6 @@ CommandList *parse_commands(char *input) {
 		commands->cmds[commands->length++] = command;
 		cmd_str = strtok_r(NULL, pipe_delim, &save_pipe_ptr);
 	}
-
-	return commands;
 }
 
 int exec_cmd(Command *command) {
@@ -275,6 +266,8 @@ int run_cmd(Command *command) {
 	execvp(command->args[0], command->args);
 	/* If we end up here an error has occurred */
 	perror(SMSH);
+	free(command->args);
+	free(command);
 	exit(EXIT_FAILURE);
 }
 
@@ -313,6 +306,7 @@ int exec_commands(CommandList *commands, const size_t cmd_index, const int fd_in
 					perror(SMSH);
 				}
 				/* If everything fails then exit the child with EXIT_FAILURE */
+				free(commands->cmds);
 				exit(EXIT_FAILURE);
 			}
 			return run_cmd(commands->cmds[cmd_index]);

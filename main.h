@@ -52,7 +52,7 @@ typedef struct {
 } CommandList;
 
 void exec(CommandList *);
-CommandList *parse_commands(char *);
+void parse_commands(CommandList *, char *);
 int exec_cmd(Command *);
 int exec_commands(CommandList *, const size_t, const int);
 int run_cmd(Command *);
