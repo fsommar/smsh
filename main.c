@@ -129,7 +129,8 @@ void exec(CommandList *commands) {
 			fg_process = false;
 		}
 	} else {
-		int ret, i;
+		size_t i;
+		int ret;
 		/* Commands were piped, handle it accordingly.
 		 *
 		 * To prevent the signal handler from registering
@@ -492,6 +493,7 @@ int checkEnv_cmd(char **args) {
 	CREATE_COMMAND(pager);
 
 	exec(command_list);
+	free(command_list);
 	return EXIT_SUCCESS;
 }
 
