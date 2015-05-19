@@ -25,6 +25,7 @@ int main(void) {
 #endif
 	/* Intercept SIGINT for parent and pass it to child */
 	TRY_OR_EXIT(sigaction(SIGINT, &sa, NULL), "sigaction");
+	TRY_OR_EXIT(sigaction(SIGTERM, &sa, NULL), "sigaction");
 
 	/* Set prompt mark here for jumping to from the signal handler */
 	while (0 != sigsetjmp(prompt_mark, 1));
@@ -154,11 +155,12 @@ void exec(CommandList *commands) {
 			case 0:
 				ret = exec_commands(commands, 0, STDIN_FILENO);
 				free(commands->cmds);
-				if (-1 == wait(NULL)) {
+				while (-1 != waitpid(-getpgid(pid), NULL, 0)) {
 					exit(EXIT_FAILURE);
 				}
 				exit(ret);
 			default:
+				pid = -getpgid(pid);
 				for (i = 0; i < commands->length; i++) {
 					free(commands->cmds[i]->args);
 					free(commands->cmds[i]);
@@ -521,6 +523,15 @@ void substitute_home(char *dst) {
  * are caught by the program: SIGINT and SIGCHLD. */
 void signal_handler(int sig) {
 	switch (sig) {
+		case SIGTERM:
+			/* If the pid is greater than 0 then it wasn't a
+			 * termination of a process group and therefore of a single
+			 * command. Because it is we can exit safely and not have to
+			 * worry about the parent process getting killed. */
+			if (pid > 0) {
+				exit(EXIT_SUCCESS);
+			}
+			break;
 		case SIGINT:
 			/* Only kill if child and fg process */
 			if (fg_process && -1 != pid) {
