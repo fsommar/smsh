@@ -129,7 +129,7 @@ void exec(CommandList *commands) {
 			fg_process = false;
 		}
 	} else {
-		int ret;
+		int ret, i;
 		/* Commands were piped, handle it accordingly.
 		 *
 		 * To prevent the signal handler from registering
@@ -157,6 +157,11 @@ void exec(CommandList *commands) {
 					exit(EXIT_FAILURE);
 				}
 				exit(ret);
+			default:
+				for (i = 0; i < commands->length; i++) {
+					free(commands->cmds[i]->args);
+					free(commands->cmds[i]);
+				}
 		}
 		TRY_OR_EXIT(sigrelse(SIGCHLD), "sigrelse");
 	}
