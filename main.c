@@ -83,6 +83,7 @@ int main(void) {
 		parse_commands(&commands, input);
 
 		if (0 == commands.length) {
+			free(commands.cmds);
 			/* For some reason an empty command was received. */
 			continue;
 		}
@@ -201,7 +202,9 @@ void parse_commands(CommandList *commands, char *input) {
 					free(commands->cmds[i]->args);
 					free(commands->cmds[i]);
 				}
-				free(commands->cmds);
+				free(command->args);
+				free(command);
+
 				commands->length = 0;
 				/* If '&' already was seen then it's not the last symbol */
 				fprintf(stderr, SMSH ": unexpected token '&'\n");
