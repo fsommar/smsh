@@ -73,7 +73,7 @@ int main(void) {
 		strcpy(input, tmp);
 		free(tmp);
 
-		if (input && *input) {
+		if (*input) {
 			/* Add command line history for the user's convenience */
 			add_history(input);
 		}
