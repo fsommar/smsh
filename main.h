@@ -20,7 +20,7 @@
 extern char *strtok_r(char *, const char *, char **);
 #endif
 
-#define SMSH ("smsh")
+#define SMSH "smsh"
 #define NUM_BUILTINS ((int) (sizeof(builtins) / sizeof(*builtins)))
 #define PIPE_READ_SIDE (0)
 #define PIPE_WRITE_SIDE (1)

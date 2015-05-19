@@ -170,8 +170,6 @@ void parse_commands(CommandList *commands, char *input) {
 	char *save_pipe_ptr, *save_space_ptr;
 	char *cmd_str = strtok_r(input, pipe_delim, &save_pipe_ptr);
 
-	Command *command;
-
 	size_t cmds_buf_len = 2;
 	commands->cmds = calloc(cmds_buf_len, sizeof(*commands->cmds));
 
@@ -180,32 +178,30 @@ void parse_commands(CommandList *commands, char *input) {
 		char *arg_str = strtok_r(cmd_str, delim, &save_space_ptr);
 		size_t args_buf_len = 3;
 
-		/* If a previous command indicated bg it indicates a parse error.
-		 * Only the last command can have & as an indicator. */
-		if (commands->bg) {
-			size_t i;
-			for (i = 0; i < commands->length; i++) {
-				free(commands->cmds[i]->args);
-				free(commands->cmds[i]);
-			}
-			free(commands->cmds);
-			commands->length = 0;
-			/* If '&' already was seen then it's not the last symbol */
-			fprintf(stderr, "smsh: inaccurate use of background character '&' (%s)", arg_str);
-			return;
-		}
-
 		/* The callee should free this after processing the command */
-		command = malloc(sizeof(*command));
+		Command *command = malloc(sizeof(*command));
 		command->num_args = 0;
 		command->args = calloc(args_buf_len, sizeof(*command->args));
 
 		/* Adds all the tokens to the command arguments, including the command itself */
 		while (NULL != arg_str) {
+			/* If a previous command indicated bg it indicates a parse error.
+			 * Only the last command can have & as an indicator. */
+			if (commands->bg) {
+				size_t i;
+				for (i = 0; i < commands->length; i++) {
+					free(commands->cmds[i]->args);
+					free(commands->cmds[i]);
+				}
+				free(commands->cmds);
+				commands->length = 0;
+				/* If '&' already was seen then it's not the last symbol */
+				fprintf(stderr, SMSH ": unexpected token '&'\n");
+				return;
+			}
+
 			if (0 == strcmp(arg_str, "&")) {
 				commands->bg = true;
-				free(command->args);
-				free(command);
 			} else {
 				/* grow args buffer if necessary */
 				if (command->num_args + 1 >= args_buf_len) {
@@ -224,8 +220,6 @@ void parse_commands(CommandList *commands, char *input) {
 			arg_str = strtok_r(NULL, delim, &save_space_ptr);
 		}
 
-		if (commands->bg) { continue; }
-
 		/* grow commands buffer if necessary */
 		if (commands->length + 1 >= cmds_buf_len) {
 			cmds_buf_len += 2;
@@ -235,9 +229,9 @@ void parse_commands(CommandList *commands, char *input) {
 				exit(EXIT_FAILURE);
 			}
 		}
-
 		commands->cmds[commands->length++] = command;
 		cmd_str = strtok_r(NULL, pipe_delim, &save_pipe_ptr);
+
 	}
 }
 
