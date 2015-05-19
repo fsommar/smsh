@@ -84,55 +84,13 @@ int main(void) {
 		}
 		if (0 == commands->length) {
 			/* For some reason an empty command was received. */
-			goto next;
+			free(commands->cmds);
+			free(commands);
+			continue;
 		}
-
-		fg_process = !commands->bg;
 
 		gettimeofday(&before, NULL);
-		if (1 == commands->length) {
-			if (EXIT_SUCCESS != exec_cmd(commands->cmds[0])) {
-				/* Execute of command failed */
-				fg_process = false;
-			}
-		} else {
-			int ret;
-			/* Commands were piped, handle it accordingly.
-			 *
-			 * To prevent the signal handler from registering
-			 * when commands in the pipeline finishes, the SIGCHLD
-			 * signal is masked during execution.
-			 *
-			 * The process is forked to allow for commands like
-			 * `sleep 10 | ls | sort` to both be run in the foreground
-			 * and suspend prompt until finished, and be run in the
-			 * background and immediately return the prompt to the
-			 * user.
-			 *
-			 * This belongs in its own function, but will have to
-			 * reside here while everything stabilizes.
-			 * */
-			TRY_OR_EXIT(sighold(SIGCHLD), "sighold");
-			switch (pid = fork()) {
-				case -1:
-					/* Skip the execution of a command and
-					 * try again at the next prompt. */
-					perror("fork");
-					fg_process = false;
-					break;
-				case 0:
-					ret = exec_commands(commands, 0, STDIN_FILENO);
-					if (-1 == wait(NULL)) {
-						exit(EXIT_FAILURE);
-					}
-					exit(ret);
-			}
-			TRY_OR_EXIT(sigrelse(SIGCHLD), "sigrelse");
-		}
-
-next:
-		free(commands->cmds);
-		free(commands);
+		exec(commands);
 		TRY_OR_EXIT(sigrelse(SIGINT), "sigrelse");
 
 		if (fg_process) {
@@ -162,6 +120,50 @@ next:
 
 	/* Call exit command on exit to clean up child processes */
 	return exit_cmd(NULL);
+}
+
+void exec(CommandList *commands) {
+	fg_process = !commands->bg;
+
+	if (1 == commands->length) {
+		if (EXIT_SUCCESS != exec_cmd(commands->cmds[0])) {
+			/* Execute of command failed */
+			fg_process = false;
+		}
+	} else {
+		int ret;
+		/* Commands were piped, handle it accordingly.
+		 *
+		 * To prevent the signal handler from registering
+		 * when commands in the pipeline finishes, the SIGCHLD
+		 * signal is masked during execution.
+		 *
+		 * The process is forked to allow for commands like
+		 * `sleep 10 | ls | sort` to both be run in the foreground
+		 * and suspend prompt until finished, and be run in the
+		 * background and immediately return the prompt to the
+		 * user.
+		 */
+		TRY_OR_EXIT(sighold(SIGCHLD), "sighold");
+		switch (pid = fork()) {
+			case -1:
+				/* Skip the execution of a command and
+				 * try again at the next prompt. */
+				perror("fork");
+				fg_process = false;
+				break;
+			case 0:
+				ret = exec_commands(commands, 0, STDIN_FILENO);
+				if (-1 == wait(NULL)) {
+					exit(EXIT_FAILURE);
+				}
+				exit(ret);
+		}
+		TRY_OR_EXIT(sigrelse(SIGCHLD), "sigrelse");
+	}
+
+	free(commands->cmds);
+	free(commands);
 }
 
 CommandList *parse_commands(char *input) {
@@ -257,7 +259,7 @@ int exec_cmd(Command *command) {
 	}
 
 	/* Fork the process and execute the command on the child process */
-	TRY(pid = fork(), "fork");
+	TRY_OR_EXIT(pid = fork(), "fork");
 
 	if (0 == pid) { /* Start execution as child */
 		return run_cmd(command);
@@ -445,7 +447,7 @@ int cd_cmd(char **args) {
 }
 
 /* Used for creating commands in checkEnv to be passed into
- * exec_commands. */
+ * exec. */
 #define CREATE_COMMAND(cmd) \
 cmd = malloc(sizeof(*cmd)); \
 cmd->num_args = 1; \
@@ -460,7 +462,6 @@ static const char *grep_s = "grep";
 
 /* The built-in checkEnv command */
 int checkEnv_cmd(char **args) {
-	int ret;
 	CommandList *command_list;
 	Command *printenv, *grep, *sort, *pager;
 
@@ -492,12 +493,8 @@ int checkEnv_cmd(char **args) {
 	CREATE_COMMAND(sort);
 	CREATE_COMMAND(pager);
 
-	TRY_OR_EXIT(sighold(SIGCHLD), "sighold");
-	ret = exec_commands(command_list, 0, STDIN_FILENO);
-	free(command_list->cmds);
-	free(command_list);
-	TRY(sigrelse(SIGCHLD), "sigrelse");
-	return ret;
+	exec(command_list);
+	return EXIT_SUCCESS;
 }
 
 /* Helper function when creating the prompt */

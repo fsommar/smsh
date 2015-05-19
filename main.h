@@ -51,6 +51,7 @@ typedef struct {
 	bool bg;
 } CommandList;
 
+void exec(CommandList *);
 CommandList *parse_commands(char *);
 int exec_cmd(Command *);
 int exec_commands(CommandList *, const size_t, const int);
